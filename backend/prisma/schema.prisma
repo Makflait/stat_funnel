@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apps App[]
+}
+
+model App {
+  id          String   @id @default(cuid())
+  name        String
+  appStoreUrl String?
+  iconUrl     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  reports Report[]
+
+  @@index([ownerId])
+}
+
+model Report {
+  id   String   @id @default(cuid())
+  appId String
+  app  App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date DateTime
+
+  installTotal                Int
+  paywallShownTotal           Int
+  trialStartedTotal           Int
+  subscriptionStartedTotal    Int
+  subscriptionCancelledTotal  Int
+  paymentFailedTotal          Int
+  subscriptionActiveTotal     Int
+
+  installDay                  Int
+  paywallShownDay             Int
+  trialStartedDay             Int
+  subscriptionStartedDay      Int
+  subscriptionCancelledDay    Int
+  paymentFailedDay            Int
+  subscriptionActiveDay       Int
+
+  netGrowthDay Int
+
+  adSpend    Decimal @db.Decimal(10, 2)
+  revenueDay Decimal @db.Decimal(10, 2)
+  refundsDay Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, date])
+  @@index([appId, date(sort: Desc)])
+}
