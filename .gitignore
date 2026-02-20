@@ -3,6 +3,7 @@ node_modules
 .env.local
 *.log
 .run
+.claude
 backend/.env
 frontend/.env
 frontend/.env.local

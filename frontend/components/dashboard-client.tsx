@@ -1,11 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,7 +17,10 @@ import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import type { AppItem, DashboardResponse, Kpis } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 type Period = "7" | "14" | "30" | "custom";
+type ValueType = "percent" | "currency" | "number";
 
 interface NegativeDeltaResponse {
   code: "NEGATIVE_DELTAS";
@@ -36,21 +39,37 @@ interface FunnelBlock {
   gradientTo: string;
 }
 
+interface KpiCardData {
+  label: string;
+  rawValue: number;
+  formatted: string;
+  valueType: ValueType;
+  icon: React.ReactNode;
+  iconBg: string;
+  iconColor: string;
+  description: string;
+  delay: number;
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
 const FUNNEL_LABELS: Record<string, string> = {
   install: "Инсталлы",
-  paywall: "Показы пейвола",
+  paywall: "Пейвол показан",
   trial: "Старт триала",
   sub: "Старт подписки",
   active: "Активные подписки",
 };
 
 const FUNNEL_GRADIENTS: Array<[string, string]> = [
-  ["#8f5cff", "#7449ff"],
-  ["#6f88ff", "#4f70ff"],
-  ["#31b9ff", "#1b9ff4"],
-  ["#20c8a3", "#12a982"],
-  ["#6fdc62", "#4dbf41"],
+  ["#7c3aed", "#5b21b6"],
+  ["#2563eb", "#1d4ed8"],
+  ["#0891b2", "#0e7490"],
+  ["#059669", "#047857"],
+  ["#16a34a", "#15803d"],
 ];
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -63,9 +82,7 @@ function shiftDays(dateIso: string, days: number) {
 }
 
 function rangeFromPeriod(period: Period, customFrom: string, customTo: string) {
-  if (period === "custom") {
-    return { from: customFrom, to: customTo };
-  }
+  if (period === "custom") return { from: customFrom, to: customTo };
   const to = todayIso();
   const from = shiftDays(to, -Number(period) + 1);
   return { from, to };
@@ -73,18 +90,15 @@ function rangeFromPeriod(period: Period, customFrom: string, customTo: string) {
 
 function buildFunnelBlocks(funnel: DashboardResponse["funnel"] | undefined): FunnelBlock[] {
   if (!funnel?.length) return [];
-
   const baseValue = Math.max(funnel[0].value, 1);
   let previousWidth = 100;
 
   return funnel.map((stage, index) => {
     const rawWidth = index === 0 ? 100 : Math.round((stage.value / baseValue) * 100);
-    const upperBound = Math.max(36, previousWidth - 2);
-    const widthPercent = index === 0 ? 100 : Math.max(36, Math.min(upperBound, rawWidth));
+    const upperBound = Math.max(38, previousWidth - 4);
+    const widthPercent = index === 0 ? 100 : Math.max(38, Math.min(upperBound, rawWidth));
     previousWidth = widthPercent;
-
     const [gradientFrom, gradientTo] = FUNNEL_GRADIENTS[index % FUNNEL_GRADIENTS.length];
-
     return {
       key: stage.key,
       label: FUNNEL_LABELS[stage.key] ?? stage.label,
@@ -106,18 +120,217 @@ async function parseErrorResponse(response: Response) {
   return body;
 }
 
-function kpiCards(kpis: Kpis | null) {
-  if (!kpis) return [];
-  return [
-    { label: "CR Install -> Paywall", value: formatPercent(kpis.crInstallToPaywall) },
-    { label: "CR Paywall -> Trial", value: formatPercent(kpis.crPaywallToTrial) },
-    { label: "CR Trial -> Subscription", value: formatPercent(kpis.crTrialToSubscription) },
-    { label: "Net Subscription Growth", value: formatNumber(kpis.netSubscriptionGrowth) },
-    { label: "Active Subscriptions", value: formatNumber(kpis.activeSubscriptions) },
-    { label: "ARPU", value: formatCurrency(kpis.arpu) },
-    { label: "CAC", value: formatCurrency(kpis.cac) },
-  ];
+// ─── Custom hook: count-up animation ─────────────────────────────────────────
+
+function useCountUp(target: number, duration = 950, decimals = 0): number {
+  const [count, setCount] = useState(0);
+  const rafRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (target === 0) {
+      setCount(0);
+      return;
+    }
+    const startTime = performance.now();
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const val = target * eased;
+      setCount(Number(val.toFixed(decimals)));
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(animate);
+      } else {
+        setCount(target);
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [target, duration, decimals]);
+
+  return count;
 }
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+
+const IconDownload = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const IconCreditCard = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+    <line x1="1" y1="10" x2="23" y2="10" />
+  </svg>
+);
+
+const IconClock = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </svg>
+);
+
+const IconTrendUp = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+    <polyline points="17 6 23 6 23 12" />
+  </svg>
+);
+
+const IconTrendDown = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
+    <polyline points="17 18 23 18 23 12" />
+  </svg>
+);
+
+const IconUsers = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const IconDollar = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="1" x2="12" y2="23" />
+    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+  </svg>
+);
+
+const IconTarget = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <circle cx="12" cy="12" r="6" />
+    <circle cx="12" cy="12" r="2" />
+  </svg>
+);
+
+const IconPlus = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+
+const IconExport = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const IconLogout = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </svg>
+);
+
+const IconWarning = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </svg>
+);
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function KpiCard({ label, rawValue, formatted, valueType, icon, iconBg, iconColor, description, delay }: KpiCardData) {
+  const decimals = valueType === "currency" ? 2 : valueType === "percent" ? 1 : 0;
+  const count = useCountUp(rawValue, 950, decimals);
+
+  const displayValue =
+    formatted === "-"
+      ? "-"
+      : valueType === "currency"
+      ? formatCurrency(count)
+      : valueType === "percent"
+      ? formatPercent(count)
+      : formatNumber(count);
+
+  return (
+    <article
+      className="card card-hover p-5 section-enter"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className="flex items-start justify-between">
+        <div
+          className="flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0"
+          style={{ backgroundColor: iconBg, color: iconColor }}
+        >
+          {icon}
+        </div>
+        <div className="badge badge-violet text-[10px] opacity-60">KPI</div>
+      </div>
+      <div className="mt-3.5">
+        <p className="text-xs text-muted leading-snug">{label}</p>
+        <p
+          className="mono mt-1.5 text-[1.65rem] font-semibold stat-number leading-none"
+          style={{ color: iconColor }}
+        >
+          {displayValue}
+        </p>
+        <p className="mt-1.5 text-[11px] text-mutedDark leading-tight">{description}</p>
+      </div>
+    </article>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="card p-5">
+      <div className="skeleton h-10 w-10 rounded-xl" />
+      <div className="mt-4 space-y-2.5">
+        <div className="skeleton h-3 w-20" />
+        <div className="skeleton h-8 w-24" />
+        <div className="skeleton h-2.5 w-32" />
+      </div>
+    </div>
+  );
+}
+
+function SkeletonBlock({ className = "" }: { className?: string }) {
+  return <div className={`skeleton ${className}`} />;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: Array<{ value: number; name: string; color: string }>;
+  label?: string;
+}
+
+function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="card glass p-3 min-w-[148px] shadow-glow">
+      <p className="mono text-[11px] text-muted mb-2.5">{label}</p>
+      {payload.map((entry) => (
+        <div key={entry.name} className="flex items-center justify-between gap-4 mt-1">
+          <span className="flex items-center gap-1.5 text-xs text-muted">
+            <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
+            {entry.name === "installs" ? "Инсталлы" : "Подписки"}
+          </span>
+          <span className="mono text-xs font-semibold text-text">{formatNumber(entry.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function DashboardClient() {
   const router = useRouter();
@@ -131,16 +344,16 @@ export default function DashboardClient() {
   const [showAppForm, setShowAppForm] = useState(false);
   const [newAppName, setNewAppName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [funnelVisible, setFunnelVisible] = useState(false);
 
   const range = useMemo(
     () => rangeFromPeriod(period, customFrom, customTo),
     [period, customFrom, customTo]
   );
-  const funnelBlocks = useMemo(
-    () => buildFunnelBlocks(dashboard?.funnel),
-    [dashboard?.funnel]
-  );
+
+  const funnelBlocks = useMemo(() => buildFunnelBlocks(dashboard?.funnel), [dashboard?.funnel]);
 
   useEffect(() => {
     const token = getToken();
@@ -148,7 +361,6 @@ export default function DashboardClient() {
       router.replace("/login");
       return;
     }
-
     loadApps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -159,15 +371,21 @@ export default function DashboardClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAppId, range.from, range.to]);
 
+  useEffect(() => {
+    setFunnelVisible(false);
+    if (funnelBlocks.length > 0) {
+      const t = setTimeout(() => setFunnelVisible(true), 120);
+      return () => clearTimeout(t);
+    }
+  }, [funnelBlocks.length, dashboard]);
+
   async function loadApps() {
     try {
       const data = await apiRequest<{ apps: AppItem[] }>("/apps");
       setApps(data.apps);
-      if (data.apps[0]) {
-        setSelectedAppId(data.apps[0].id);
-      }
-    } catch (loadError) {
-      handleApiError(loadError);
+      if (data.apps[0]) setSelectedAppId(data.apps[0].id);
+    } catch (err) {
+      handleApiError(err);
     } finally {
       setLoading(false);
     }
@@ -175,23 +393,26 @@ export default function DashboardClient() {
 
   async function loadDashboard(appId: string, from: string, to: string) {
     setError(null);
+    setDashboardLoading(true);
     try {
       const query = new URLSearchParams({ appId, from, to });
       const data = await apiRequest<DashboardResponse>(`/dashboard?${query.toString()}`);
       setDashboard(data);
-    } catch (loadError) {
-      handleApiError(loadError);
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setDashboardLoading(false);
     }
   }
 
-  function handleApiError(apiError: unknown) {
-    if (apiError instanceof Error) {
-      if (/Unauthorized|Invalid token|401/.test(apiError.message)) {
+  function handleApiError(err: unknown) {
+    if (err instanceof Error) {
+      if (/Unauthorized|Invalid token|401/.test(err.message)) {
         clearToken();
         router.replace("/login");
         return;
       }
-      setError(apiError.message);
+      setError(err.message);
       return;
     }
     setError("Неизвестная ошибка");
@@ -200,58 +421,42 @@ export default function DashboardClient() {
   async function createApp(event: FormEvent) {
     event.preventDefault();
     if (!newAppName.trim()) return;
-
     try {
       const response = await apiRequest<{ app: AppItem }>("/apps", {
         method: "POST",
         body: JSON.stringify({ name: newAppName.trim() }),
       });
-
       setApps((prev) => [response.app, ...prev]);
       setSelectedAppId(response.app.id);
       setNewAppName("");
       setShowAppForm(false);
-    } catch (createError) {
-      handleApiError(createError);
+    } catch (err) {
+      handleApiError(err);
     }
   }
 
   async function createReport(payload: ReportFormPayload, forceConfirm = false): Promise<void> {
     const token = getToken();
-
     const response = await fetch(buildApiUrl("/reports"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({
-        ...payload,
-        confirmNegativeDeltas: forceConfirm,
-      }),
+      body: JSON.stringify({ ...payload, confirmNegativeDeltas: forceConfirm }),
     });
 
     if (!response.ok) {
       const body = await parseErrorResponse(response);
-
-      if (
-        body &&
-        typeof body === "object" &&
-        "code" in body &&
-        body.code === "NEGATIVE_DELTAS" &&
-        !forceConfirm
-      ) {
-        const details = body.negativeDeltas.map((item) => `${item.field}: ${item.value}`).join("\n");
+      if (body && "code" in body && body.code === "NEGATIVE_DELTAS" && !forceConfirm) {
+        const details = body.negativeDeltas.map((d) => `${d.field}: ${d.value}`).join("\n");
         const accepted = window.confirm(
           `${body.message}\n\n${details}\n\nСохранить отчёт несмотря на это?`
         );
-        if (accepted) {
-          return createReport(payload, true);
-        }
+        if (accepted) return createReport(payload, true);
         throw new Error("Отчёт не сохранён");
       }
-
-      const message = body && typeof body === "object" && "message" in body ? body.message : null;
+      const message = body && "message" in body ? body.message : null;
       throw new Error(message || `Ошибка создания отчёта: ${response.status}`);
     }
 
@@ -260,24 +465,12 @@ export default function DashboardClient() {
 
   async function exportCsv() {
     if (!selectedAppId) return;
-
     const token = getToken();
-    const query = new URLSearchParams({
-      appId: selectedAppId,
-      from: range.from,
-      to: range.to,
-    });
-
+    const query = new URLSearchParams({ appId: selectedAppId, from: range.from, to: range.to });
     const response = await fetch(buildApiUrl(`/reports/export?${query.toString()}`), {
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
-
-    if (!response.ok) {
-      throw new Error(`Ошибка экспорта: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`Ошибка экспорта: ${response.status}`);
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -289,35 +482,167 @@ export default function DashboardClient() {
     URL.revokeObjectURL(url);
   }
 
+  // Build KPI card data
+  const kpiCards = useMemo<KpiCardData[] | null>(() => {
+    const kpis: Kpis | null = dashboard?.kpis ?? null;
+    if (!kpis) return null;
+
+    const netIsPositive = kpis.netSubscriptionGrowth >= 0;
+
+    return [
+      {
+        label: "CR Install → Paywall",
+        rawValue: kpis.crInstallToPaywall ?? 0,
+        formatted: formatPercent(kpis.crInstallToPaywall),
+        valueType: "percent",
+        icon: <IconDownload />,
+        iconBg: "rgba(124, 58, 237, 0.16)",
+        iconColor: "#a78bfa",
+        description: "Конверсия: установка → пейвол",
+        delay: 0,
+      },
+      {
+        label: "CR Paywall → Trial",
+        rawValue: kpis.crPaywallToTrial ?? 0,
+        formatted: formatPercent(kpis.crPaywallToTrial),
+        valueType: "percent",
+        icon: <IconCreditCard />,
+        iconBg: "rgba(6, 182, 212, 0.14)",
+        iconColor: "#22d3ee",
+        description: "Конверсия: пейвол → триал",
+        delay: 80,
+      },
+      {
+        label: "CR Trial → Subscription",
+        rawValue: kpis.crTrialToSubscription ?? 0,
+        formatted: formatPercent(kpis.crTrialToSubscription),
+        valueType: "percent",
+        icon: <IconClock />,
+        iconBg: "rgba(16, 185, 129, 0.14)",
+        iconColor: "#34d399",
+        description: "Конверсия: триал → подписка",
+        delay: 160,
+      },
+      {
+        label: "Net Subscription Growth",
+        rawValue: kpis.netSubscriptionGrowth,
+        formatted: formatNumber(kpis.netSubscriptionGrowth),
+        valueType: "number",
+        icon: netIsPositive ? <IconTrendUp /> : <IconTrendDown />,
+        iconBg: netIsPositive ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.13)",
+        iconColor: netIsPositive ? "#34d399" : "#f87171",
+        description: "Новые − отменённые подписки",
+        delay: 240,
+      },
+      {
+        label: "Активные подписки",
+        rawValue: kpis.activeSubscriptions,
+        formatted: formatNumber(kpis.activeSubscriptions),
+        valueType: "number",
+        icon: <IconUsers />,
+        iconBg: "rgba(99, 102, 241, 0.14)",
+        iconColor: "#818cf8",
+        description: "Всего активных подписок",
+        delay: 320,
+      },
+      {
+        label: "ARPU",
+        rawValue: kpis.arpu ?? 0,
+        formatted: formatCurrency(kpis.arpu),
+        valueType: "currency",
+        icon: <IconDollar />,
+        iconBg: "rgba(245, 158, 11, 0.14)",
+        iconColor: "#fbbf24",
+        description: "Средний доход на пользователя",
+        delay: 400,
+      },
+      {
+        label: "CAC",
+        rawValue: kpis.cac ?? 0,
+        formatted: formatCurrency(kpis.cac),
+        valueType: "currency",
+        icon: <IconTarget />,
+        iconBg: "rgba(239, 68, 68, 0.12)",
+        iconColor: "#f87171",
+        description: "Стоимость привлечения (CAC)",
+        delay: 480,
+      },
+    ];
+  }, [dashboard?.kpis]);
+
+  // ─── Loading screen ────────────────────────────────────────────────────────
+
   if (loading) {
-    return <main className="flex min-h-screen items-center justify-center">Загрузка...</main>;
+    return (
+      <main className="flex min-h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative h-12 w-12">
+            <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primaryBright animate-spin" />
+          </div>
+          <p className="text-sm text-muted">Загрузка дашборда...</p>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-6 sm:px-6 lg:px-10">
-      <div className="pointer-events-none absolute left-[-120px] top-[-80px] h-80 w-80 rounded-full bg-primary/30 blur-3xl animate-floatPulse" />
-      <div className="pointer-events-none absolute right-[-120px] top-[220px] h-72 w-72 rounded-full bg-primarySoft/20 blur-3xl animate-floatPulse" />
+    <main className="relative min-h-screen overflow-x-hidden px-4 py-6 sm:px-6 lg:px-10">
+      {/* Background ambient blobs */}
+      <div className="pointer-events-none fixed left-[-180px] top-[-120px] h-[560px] w-[560px] rounded-full bg-primary/[0.14] blur-[120px] animate-floatPulse" />
+      <div className="pointer-events-none fixed right-[-120px] top-[300px] h-[450px] w-[450px] rounded-full bg-accent/[0.07] blur-[100px] animate-floatPulseAlt" />
+      <div className="pointer-events-none fixed bottom-[-120px] left-[35%] h-[380px] w-[380px] rounded-full bg-primary/[0.09] blur-[100px] animate-floatPulseSlow" />
 
-      <section className="relative z-10 mx-auto max-w-7xl space-y-6">
-        <header className="card grid-lines glass p-5 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <section className="relative z-10 mx-auto max-w-7xl space-y-5">
+
+        {/* ╔══════════════════════════╗
+            ║         HEADER           ║
+            ╚══════════════════════════╝ */}
+        <header className="card glass grid-lines p-5 sm:p-6 section-enter">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            {/* Title */}
             <div>
-              <p className="mono text-xs uppercase tracking-[0.2em] text-muted">Stat Funnel</p>
-              <h1 className="mt-2 text-3xl font-semibold">Дневной growth-дашборд</h1>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/20 border border-primary/30">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                  </svg>
+                </div>
+                <span className="mono text-[11px] uppercase tracking-[0.22em] text-muted">Stat Funnel</span>
+                <span className="badge badge-violet">v1.0</span>
+              </div>
+              <h1 className="mt-2.5 text-[2rem] font-semibold leading-tight gradient-text-violet">
+                Growth Dashboard
+              </h1>
+              <div className="mt-1.5 flex items-center gap-3 flex-wrap">
+                <p className="text-sm text-muted">
+                  {range.from} — {range.to}
+                </p>
+                {dashboard?.table.length ? (
+                  <span className="badge badge-success">
+                    <span className="h-1.5 w-1.5 rounded-full bg-successSoft animate-pulseGlow" />
+                    {dashboard.table.length} дней
+                  </span>
+                ) : null}
+              </div>
             </div>
+
+            {/* Action buttons */}
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => setShowReportForm(true)}
                 disabled={!selectedAppId}
-                className="rounded-xl bg-primary px-4 py-2 font-semibold text-bg hover:bg-primarySoft disabled:opacity-50"
+                className="btn btn-primary"
               >
+                <IconPlus />
                 Создать отчёт
               </button>
               <button
                 onClick={() => exportCsv().catch(handleApiError)}
                 disabled={!selectedAppId}
-                className="rounded-xl border border-border px-4 py-2 text-sm hover:border-primary"
+                className="btn btn-ghost"
               >
+                <IconExport />
                 Экспорт CSV
               </button>
               <button
@@ -325,19 +650,22 @@ export default function DashboardClient() {
                   clearToken();
                   router.push("/login");
                 }}
-                className="rounded-xl border border-border px-4 py-2 text-sm"
+                className="btn btn-ghost"
               >
+                <IconLogout />
                 Выйти
               </button>
             </div>
           </div>
 
-          <div className="mt-6 flex flex-col gap-4 lg:flex-row">
+          {/* ── Controls row ── */}
+          <div className="mt-5 pt-5 border-t border-border/50 flex flex-col gap-3 lg:flex-row">
+            {/* App selector */}
             <div className="flex flex-1 flex-wrap items-center gap-2">
               <select
-                className="rounded-lg border border-border bg-bg/70 px-3 py-2"
+                className="input-field max-w-[260px] py-2.5"
                 value={selectedAppId}
-                onChange={(event) => setSelectedAppId(event.target.value)}
+                onChange={(e) => setSelectedAppId(e.target.value)}
               >
                 {apps.length === 0 ? <option value="">Нет приложений</option> : null}
                 {apps.map((app) => (
@@ -347,169 +675,423 @@ export default function DashboardClient() {
                 ))}
               </select>
               <button
-                onClick={() => setShowAppForm((prev) => !prev)}
-                className="rounded-lg border border-border px-3 py-2 text-sm"
+                onClick={() => setShowAppForm((p) => !p)}
+                className="btn btn-ghost py-2.5 px-3 text-xs"
               >
-                {showAppForm ? "Отмена" : "Добавить приложение"}
+                {showAppForm ? "Отмена" : "+ Приложение"}
               </button>
             </div>
 
+            {/* Period pills */}
             <div className="flex flex-wrap items-center gap-2">
               {(["7", "14", "30", "custom"] as Period[]).map((item) => (
                 <button
                   key={item}
                   onClick={() => setPeriod(item)}
-                  className={`rounded-lg px-3 py-2 text-sm ${
-                    period === item ? "bg-primary text-bg" : "border border-border"
+                  className={`rounded-xl px-3.5 py-2 text-sm font-medium transition-all duration-200 ${
+                    period === item
+                      ? "bg-primary text-white shadow-glowSm border-transparent"
+                      : "btn-ghost text-muted hover:text-text"
                   }`}
+                  style={period === item ? { border: "1px solid transparent" } : {}}
                 >
-                  {item === "custom" ? "Свой период" : `${item}д`}
+                  {item === "custom" ? "Свой период" : `${item} дней`}
                 </button>
               ))}
-              {period === "custom" ? (
+
+              {period === "custom" && (
                 <>
                   <input
                     type="date"
-                    className="rounded-lg border border-border bg-bg/70 px-3 py-2"
+                    className="input-field max-w-[160px] py-2"
                     value={customFrom}
-                    onChange={(event) => setCustomFrom(event.target.value)}
+                    onChange={(e) => setCustomFrom(e.target.value)}
                   />
+                  <span className="text-muted text-sm">—</span>
                   <input
                     type="date"
-                    className="rounded-lg border border-border bg-bg/70 px-3 py-2"
+                    className="input-field max-w-[160px] py-2"
                     value={customTo}
-                    onChange={(event) => setCustomTo(event.target.value)}
+                    onChange={(e) => setCustomTo(e.target.value)}
                   />
                 </>
-              ) : null}
+              )}
             </div>
           </div>
 
-          {showAppForm ? (
-            <form onSubmit={createApp} className="mt-4 flex gap-2">
+          {/* New app form */}
+          {showAppForm && (
+            <form
+              onSubmit={createApp}
+              className="mt-4 flex gap-2 animate-slideDown"
+            >
               <input
                 value={newAppName}
-                onChange={(event) => setNewAppName(event.target.value)}
+                onChange={(e) => setNewAppName(e.target.value)}
                 placeholder="Название приложения"
-                className="w-56 rounded-lg border border-border bg-bg/70 px-3 py-2"
+                className="input-field max-w-[240px] py-2"
               />
-              <button className="rounded-lg bg-primary px-3 py-2 text-bg" type="submit">
+              <button className="btn btn-primary py-2" type="submit">
                 Создать
               </button>
             </form>
-          ) : null}
+          )}
 
-          {error ? <p className="mt-4 text-sm text-warning">{error}</p> : null}
+          {/* Error banner */}
+          {error && (
+            <div className="mt-4 flex items-center gap-2.5 rounded-xl border border-warning/25 bg-warning/[0.07] px-4 py-3 text-sm text-warningSoft animate-slideDown">
+              <IconWarning />
+              {error}
+            </div>
+          )}
         </header>
 
-        <section className="card p-5 sm:p-6">
-          <h2 className="text-xl font-semibold">Воронка</h2>
-          <p className="mt-2 text-sm text-muted">От инсталла до активной подписки</p>
+        {/* ╔══════════════════════════╗
+            ║        KPI CARDS         ║
+            ╚══════════════════════════╝ */}
+        {dashboardLoading ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
+        ) : kpiCards ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {kpiCards.map((card) => (
+              <KpiCard key={card.label} {...card} />
+            ))}
+          </div>
+        ) : null}
+
+        {/* ╔══════════════════════════╗
+            ║          FUNNEL          ║
+            ╚══════════════════════════╝ */}
+        <section
+          className="card p-5 sm:p-6 section-enter"
+          style={{ animationDelay: "200ms" }}
+        >
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Воронка конверсии</h2>
+              <p className="mt-0.5 text-sm text-muted">
+                От инсталла до активной подписки
+              </p>
+            </div>
+            {funnelBlocks.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="badge badge-violet">{funnelBlocks.length} этапов</span>
+              </div>
+            )}
+          </div>
 
           {funnelBlocks.length > 0 ? (
-            <div className="mt-6 flex flex-col items-center gap-3">
-              {funnelBlocks.map((block) => (
-                <div key={block.key} className="flex w-full justify-center">
-                  <article
-                    className="relative overflow-hidden border border-white/15 text-white shadow-glow"
+            <div className="mt-6 flex flex-col items-center gap-1.5">
+              {funnelBlocks.map((block, index) => (
+                <div key={block.key} className="flex w-full flex-col items-center">
+                  {/* Funnel bar */}
+                  <div
+                    className="relative overflow-hidden border border-white/10 text-white"
                     style={{
-                      width: `${block.widthPercent}%`,
-                      clipPath: "polygon(4% 0, 96% 0, 100% 100%, 0 100%)",
-                      background: `linear-gradient(120deg, ${block.gradientFrom}, ${block.gradientTo})`,
+                      width: funnelVisible ? `${block.widthPercent}%` : "18%",
+                      clipPath: "polygon(2.5% 0%, 97.5% 0%, 100% 100%, 0% 100%)",
+                      background: `linear-gradient(118deg, ${block.gradientFrom}ee, ${block.gradientTo})`,
+                      transition: `width 950ms cubic-bezier(0.34, 1.4, 0.64, 1) ${index * 110}ms, opacity 450ms ease ${index * 80}ms`,
+                      opacity: funnelVisible ? 1 : 0,
+                      boxShadow: `0 6px 28px ${block.gradientFrom}50`,
+                      minWidth: 0,
                     }}
                   >
-                    <div className="absolute inset-0 bg-gradient-to-b from-white/10 to-transparent" />
-                    <div className="relative z-10 flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
+                    {/* Shine overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-white/[0.13] to-transparent pointer-events-none" />
+                    {/* Moving shimmer */}
+                    <div
+                      className="absolute inset-0 pointer-events-none"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%)",
+                        animation: "shimmer 4s linear infinite",
+                        backgroundSize: "200% 100%",
+                        opacity: 0.6,
+                      }}
+                    />
+
+                    <div className="relative z-10 flex flex-col gap-1 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <p className="mono text-[11px] uppercase tracking-[0.16em] text-white/85">
+                        <p className="mono text-[10px] uppercase tracking-[0.18em] text-white/70">
                           {block.label}
                         </p>
-                        <p className="mt-1 text-3xl font-semibold">{formatNumber(block.value)}</p>
+                        <p className="mt-0.5 text-[1.6rem] font-semibold leading-none stat-number">
+                          {formatNumber(block.value)}
+                        </p>
                       </div>
-                      <div className="text-xs text-white/90 sm:text-sm">
-                        <p>От предыдущего: {formatPercent(block.percentFromPrevious)}</p>
-                        <p>От инсталлов: {formatPercent(block.percentFromInstalls)}</p>
+                      <div className="flex gap-4 text-white/80 sm:flex-col sm:items-end sm:gap-0.5">
+                        <p className="text-xs">
+                          <span className="opacity-55">от пред. </span>
+                          <span className="font-semibold text-white/95">
+                            {formatPercent(block.percentFromPrevious)}
+                          </span>
+                        </p>
+                        <p className="text-xs">
+                          <span className="opacity-55">от инстал. </span>
+                          <span className="font-semibold text-white/95">
+                            {formatPercent(block.percentFromInstalls)}
+                          </span>
+                        </p>
                       </div>
                     </div>
-                  </article>
+                  </div>
+
+                  {/* Connector arrow */}
+                  {index < funnelBlocks.length - 1 && (
+                    <div
+                      className="funnel-arrow"
+                      style={{
+                        opacity: funnelVisible ? 0.45 : 0,
+                        transitionDelay: `${(index + 1) * 110 + 400}ms`,
+                        transition: "opacity 400ms ease",
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 16.5l-7.5-9h15z" />
+                      </svg>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="mt-6 text-sm text-muted">Нет данных за выбранный период</p>
+            <div className="mt-8 flex flex-col items-center gap-4 py-10 text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-panel/70">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted">
+                  <path d="M3 3h18v4H3z" />
+                  <path d="M5 7h14v4H5z" />
+                  <path d="M7 11h10v4H7z" />
+                  <path d="M9 15h6v4H9z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-text">Нет данных за период</p>
+                <p className="mt-1 text-xs text-muted">Создайте первый ежедневный отчёт</p>
+              </div>
+              <button
+                onClick={() => setShowReportForm(true)}
+                disabled={!selectedAppId}
+                className="btn btn-primary py-2.5 text-sm"
+              >
+                <IconPlus />
+                Добавить отчёт
+              </button>
+            </div>
           )}
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {kpiCards(dashboard?.kpis ?? null).map((item) => (
-            <article key={item.label} className="card p-4">
-              <p className="text-sm text-muted">{item.label}</p>
-              <p className="mt-2 text-3xl font-semibold">{item.value}</p>
-            </article>
-          ))}
-        </section>
+        {/* ╔══════════════════════════╗
+            ║          CHART           ║
+            ╚══════════════════════════╝ */}
+        <section
+          className="card p-5 sm:p-6 section-enter"
+          style={{ animationDelay: "320ms" }}
+        >
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Динамика инсталлов и подписок</h2>
+              <p className="mt-0.5 text-sm text-muted">Ежедневные значения за период</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="flex items-center gap-2 text-xs text-muted">
+                <span className="h-2.5 w-2.5 rounded-full bg-primaryBright" />
+                Инсталлы
+              </span>
+              <span className="flex items-center gap-2 text-xs text-muted">
+                <span className="h-2.5 w-2.5 rounded-full bg-success" />
+                Подписки
+              </span>
+            </div>
+          </div>
 
-        <section className="card p-5 sm:p-6">
-          <h2 className="text-xl font-semibold">Динамика инсталлов и подписок</h2>
-          <div className="mt-4 h-[320px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dashboard?.trend ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2b2343" />
-                <XAxis dataKey="date" stroke="#9f96c9" />
-                <YAxis stroke="#9f96c9" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#130f22",
-                    border: "1px solid #2b2343",
-                    borderRadius: 12,
-                  }}
-                />
-                <Line type="monotone" dataKey="installs" stroke="#8f5cff" strokeWidth={2.5} dot={false} />
-                <Line
-                  type="monotone"
-                  dataKey="subscriptions"
-                  stroke="#21c67a"
-                  strokeWidth={2.5}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+          <div className="mt-5 h-[300px] w-full">
+            {dashboardLoading ? (
+              <div className="flex h-full items-center justify-center">
+                <div className="relative h-9 w-9">
+                  <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primaryBright animate-spin" />
+                </div>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={dashboard?.trend ?? []}
+                  margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="colorInstalls" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.38} />
+                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.02} />
+                    </linearGradient>
+                    <linearGradient id="colorSubs" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.32} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="4 4" stroke="rgba(36,29,63,0.55)" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11, fill: "#8b82c4", fontFamily: "var(--font-plex-mono)" }}
+                    tickLine={false}
+                    axisLine={{ stroke: "rgba(36,29,63,0.5)" }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "#8b82c4", fontFamily: "var(--font-plex-mono)" }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={44}
+                  />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Area
+                    type="monotone"
+                    dataKey="installs"
+                    stroke="#8b5cf6"
+                    strokeWidth={2.5}
+                    fill="url(#colorInstalls)"
+                    dot={false}
+                    activeDot={{ r: 5, fill: "#8b5cf6", strokeWidth: 2.5, stroke: "#130f22" }}
+                    animationDuration={1200}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="subscriptions"
+                    stroke="#10b981"
+                    strokeWidth={2.5}
+                    fill="url(#colorSubs)"
+                    dot={false}
+                    activeDot={{ r: 5, fill: "#10b981", strokeWidth: 2.5, stroke: "#130f22" }}
+                    animationDuration={1400}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </section>
 
-        <section className="card overflow-x-auto p-5 sm:p-6">
-          <h2 className="text-xl font-semibold">Ежедневные отчёты</h2>
-          <table className="mt-4 w-full min-w-[860px] border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-muted">
-                <th className="pb-3 pr-4">Дата</th>
-                <th className="pb-3 pr-4">Инсталлы (daily)</th>
-                <th className="pb-3 pr-4">Подписки (daily)</th>
-                <th className="pb-3 pr-4">Отмены (daily)</th>
-                <th className="pb-3 pr-4">Revenue</th>
-                <th className="pb-3 pr-4">Ad Spend</th>
-                <th className="pb-3 pr-4">Net Growth</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(dashboard?.table ?? []).map((row) => (
-                <tr key={row.id} className="border-b border-border/70">
-                  <td className="py-3 pr-4">{row.date}</td>
-                  <td className="py-3 pr-4">{formatNumber(row.installDay)}</td>
-                  <td className="py-3 pr-4">{formatNumber(row.subscriptionStartedDay)}</td>
-                  <td className="py-3 pr-4">{formatNumber(row.subscriptionCancelledDay)}</td>
-                  <td className="py-3 pr-4">{formatCurrency(row.revenueDay)}</td>
-                  <td className="py-3 pr-4">{formatCurrency(row.adSpend)}</td>
-                  <td className={`py-3 pr-4 ${row.netGrowthDay >= 0 ? "text-positive" : "text-warning"}`}>
-                    {formatNumber(row.netGrowthDay)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* ╔══════════════════════════╗
+            ║          TABLE           ║
+            ╚══════════════════════════╝ */}
+        <section
+          className="card overflow-hidden section-enter"
+          style={{ animationDelay: "440ms" }}
+        >
+          {/* Table header */}
+          <div className="flex items-center justify-between border-b border-border/55 px-5 py-4 sm:px-6">
+            <div>
+              <h2 className="text-lg font-semibold">Ежедневные отчёты</h2>
+              <p className="mt-0.5 text-sm text-muted">
+                {dashboard?.table.length
+                  ? `${dashboard.table.length} ${dashboard.table.length === 1 ? "запись" : "записей"}`
+                  : "Нет данных"}
+              </p>
+            </div>
+            {dashboard?.table.length ? (
+              <span className="badge badge-violet">{range.from} → {range.to}</span>
+            ) : null}
+          </div>
+
+          {/* Table body */}
+          <div className="overflow-x-auto">
+            {dashboardLoading ? (
+              <div className="p-5 space-y-2.5">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <SkeletonBlock key={i} className="h-11 w-full" />
+                ))}
+              </div>
+            ) : (
+              <table className="w-full min-w-[820px] border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-border/55 bg-panel/40">
+                    <th className="px-5 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Дата
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Инсталлы
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Подписки
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Отмены
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Revenue
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Ad Spend
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Net Growth
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(dashboard?.table ?? []).map((row, rowIndex) => (
+                    <tr
+                      key={row.id}
+                      className={`border-b border-border/35 table-row-hover text-sm ${
+                        rowIndex % 2 === 0 ? "" : "bg-white/[0.013]"
+                      }`}
+                    >
+                      <td className="mono px-5 py-3.5 text-[12px] text-muted">{row.date}</td>
+                      <td className="px-4 py-3.5 font-medium text-text">
+                        {formatNumber(row.installDay)}
+                      </td>
+                      <td className="px-4 py-3.5 font-medium text-primarySoft">
+                        {formatNumber(row.subscriptionStartedDay)}
+                      </td>
+                      <td className="px-4 py-3.5 text-warningSoft">
+                        {formatNumber(row.subscriptionCancelledDay)}
+                      </td>
+                      <td className="mono px-4 py-3.5 text-successSoft">
+                        {formatCurrency(row.revenueDay)}
+                      </td>
+                      <td className="mono px-4 py-3.5 text-muted">
+                        {formatCurrency(row.adSpend)}
+                      </td>
+                      <td
+                        className={`mono px-4 py-3.5 font-semibold ${
+                          row.netGrowthDay >= 0 ? "text-successSoft" : "text-dangerSoft"
+                        }`}
+                      >
+                        {row.netGrowthDay >= 0 ? "+" : ""}
+                        {formatNumber(row.netGrowthDay)}
+                      </td>
+                    </tr>
+                  ))}
+                  {(dashboard?.table ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-5 py-14 text-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="h-12 w-12 rounded-2xl border border-border bg-panel/50 flex items-center justify-center">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mutedDark">
+                              <rect x="3" y="3" width="18" height="18" rx="2" />
+                              <line x1="3" y1="9" x2="21" y2="9" />
+                              <line x1="3" y1="15" x2="21" y2="15" />
+                              <line x1="9" y1="9" x2="9" y2="21" />
+                            </svg>
+                          </div>
+                          <p className="text-sm text-muted">Нет данных за выбранный период</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
         </section>
+
+        {/* Bottom spacer */}
+        <div className="h-6" />
       </section>
 
+      {/* ── Report Form Modal ── */}
       {showReportForm && selectedAppId ? (
         <ReportFormModal
           appId={selectedAppId}
