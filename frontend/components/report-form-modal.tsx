@@ -36,13 +36,29 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// ─── Field groups ─────────────────────────────────────────────────────────────
+// ─── Field definitions ────────────────────────────────────────────────────────
 
-const FUNNEL_FIELDS = [
+/**
+ * CREATE mode  → user enters cumulative totals (e.g. installTotal = 10 500)
+ * EDIT mode    → user sees and edits DAILY values (e.g. installDay = 50),
+ *               because that's what the table shows. We convert back to totals
+ *               on submit: newTotal = (currentTotal - currentDay) + newDayValue
+ */
+
+interface FieldDef {
+  name: string;          // maps to FormData key AND to initialData key
+  label: string;
+  hint: string;
+  icon: React.ReactNode;
+  color: string;
+}
+
+const FUNNEL_FIELDS_CREATE: FieldDef[] = [
   {
     name: "installTotal",
     label: "Инсталлы total",
     hint: "Кумулятивное кол-во установок",
+    color: "#2dd4bf",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -50,47 +66,47 @@ const FUNNEL_FIELDS = [
         <line x1="12" y1="15" x2="12" y2="3" />
       </svg>
     ),
-    color: "#2dd4bf",
   },
   {
     name: "paywallShownTotal",
     label: "Показы пейвола total",
-    hint: "Кол-во показов экрана подписки",
+    hint: "Кумулятивное число показов пейвола",
+    color: "#38bdf8",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
         <line x1="1" y1="10" x2="23" y2="10" />
       </svg>
     ),
-    color: "#38bdf8",
   },
   {
     name: "trialStartedTotal",
     label: "Триалы total",
-    hint: "Всего запущено пробных периодов",
+    hint: "Кумулятивное кол-во запущенных триалов",
+    color: "#a78bfa",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <circle cx="12" cy="12" r="10" />
         <polyline points="12 6 12 12 16 14" />
       </svg>
     ),
-    color: "#a78bfa",
   },
   {
     name: "subscriptionStartedTotal",
     label: "Подписки started total",
-    hint: "Всего запущено подписок",
+    hint: "Кумулятивное кол-во запущенных подписок",
+    color: "#4ade80",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="20 6 9 17 4 12" />
       </svg>
     ),
-    color: "#4ade80",
   },
   {
     name: "subscriptionCancelledTotal",
     label: "Подписки cancelled total",
-    hint: "Всего отменено подписок",
+    hint: "Кумулятивное кол-во отменённых подписок",
+    color: "#f87171",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <circle cx="12" cy="12" r="10" />
@@ -98,12 +114,12 @@ const FUNNEL_FIELDS = [
         <line x1="9" y1="9" x2="15" y2="15" />
       </svg>
     ),
-    color: "#f87171",
   },
   {
     name: "paymentFailedTotal",
     label: "Payment failed total",
-    hint: "Всего неудачных платежей",
+    hint: "Кумулятивное кол-во неудачных платежей",
+    color: "#fbbf24",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -111,12 +127,12 @@ const FUNNEL_FIELDS = [
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
     ),
-    color: "#fbbf24",
   },
   {
     name: "subscriptionActiveTotal",
     label: "Активные подписки total",
-    hint: "Текущее число активных подписок",
+    hint: "Текущее число активных подписок (снэпшот)",
+    color: "#818cf8",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -125,16 +141,71 @@ const FUNNEL_FIELDS = [
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     ),
-    color: "#818cf8",
   },
 ];
 
-const FINANCIAL_FIELDS = [
+/**
+ * In edit mode the user edits DAY values (matching what the table displays).
+ * subscriptionActiveTotal stays as a "snapshot" total — it's not a flow metric.
+ */
+const FUNNEL_FIELDS_EDIT: FieldDef[] = [
+  {
+    name: "installTotal", // we reuse the same `name` key; conversion happens in submit
+    label: "Инсталлы за день",
+    hint: "Кол-во установок за этот день (не кумулятив)",
+    color: "#2dd4bf",
+    icon: FUNNEL_FIELDS_CREATE[0].icon,
+  },
+  {
+    name: "paywallShownTotal",
+    label: "Показы пейвола за день",
+    hint: "Показы пейвола за этот день",
+    color: "#38bdf8",
+    icon: FUNNEL_FIELDS_CREATE[1].icon,
+  },
+  {
+    name: "trialStartedTotal",
+    label: "Триал за день",
+    hint: "Запущено триалов за этот день",
+    color: "#a78bfa",
+    icon: FUNNEL_FIELDS_CREATE[2].icon,
+  },
+  {
+    name: "subscriptionStartedTotal",
+    label: "Подписки за день",
+    hint: "Новых подписок за этот день",
+    color: "#4ade80",
+    icon: FUNNEL_FIELDS_CREATE[3].icon,
+  },
+  {
+    name: "subscriptionCancelledTotal",
+    label: "Отмены за день",
+    hint: "Отменено подписок за этот день",
+    color: "#f87171",
+    icon: FUNNEL_FIELDS_CREATE[4].icon,
+  },
+  {
+    name: "paymentFailedTotal",
+    label: "Payment failed за день",
+    hint: "Неудачных платежей за этот день",
+    color: "#fbbf24",
+    icon: FUNNEL_FIELDS_CREATE[5].icon,
+  },
+  {
+    name: "subscriptionActiveTotal",
+    label: "Активные подписки (всего)",
+    hint: "Текущее число активных подписок (снэпшот, не дельта)",
+    color: "#818cf8",
+    icon: FUNNEL_FIELDS_CREATE[6].icon,
+  },
+];
+
+const FINANCIAL_FIELDS: FieldDef[] = [
   {
     name: "adSpend",
     label: "Ad Spend (день)",
     hint: "Расходы на рекламу за день",
-    step: "0.01",
+    color: "#2dd4bf",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -142,33 +213,30 @@ const FINANCIAL_FIELDS = [
         <path d="M2 12l10 5 10-5" />
       </svg>
     ),
-    color: "#2dd4bf",
   },
   {
     name: "revenueDay",
     label: "Revenue (день)",
     hint: "Доход за день",
-    step: "0.01",
+    color: "#4ade80",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <line x1="12" y1="1" x2="12" y2="23" />
         <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
       </svg>
     ),
-    color: "#4ade80",
   },
   {
     name: "refundsDay",
     label: "Refunds (день)",
     hint: "Возвраты за день",
-    step: "0.01",
+    color: "#fbbf24",
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="1 4 1 10 7 10" />
         <path d="M3.51 15a9 9 0 1 0 .49-3.5" />
       </svg>
     ),
-    color: "#fbbf24",
   },
 ];
 
@@ -182,24 +250,57 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("funnel");
 
-  // Memoised once on mount so inputs keep their defaultValues across re-renders
+  const funnelFields = isEditMode ? FUNNEL_FIELDS_EDIT : FUNNEL_FIELDS_CREATE;
+
+  /**
+   * defaults: in edit mode pre-fill with DAY values (matching what the table shows),
+   * except subscriptionActiveTotal which is always a snapshot total.
+   */
   const defaults = useMemo(
-    () => ({
-      date: initialData?.date ?? todayIso(),
-      installTotal: initialData?.installTotal ?? 0,
-      paywallShownTotal: initialData?.paywallShownTotal ?? 0,
-      trialStartedTotal: initialData?.trialStartedTotal ?? 0,
-      subscriptionStartedTotal: initialData?.subscriptionStartedTotal ?? 0,
-      subscriptionCancelledTotal: initialData?.subscriptionCancelledTotal ?? 0,
-      paymentFailedTotal: initialData?.paymentFailedTotal ?? 0,
-      subscriptionActiveTotal: initialData?.subscriptionActiveTotal ?? 0,
-      adSpend: initialData?.adSpend ?? 0,
-      revenueDay: initialData?.revenueDay ?? 0,
-      refundsDay: initialData?.refundsDay ?? 0,
-    }),
+    () =>
+      isEditMode && initialData
+        ? {
+            date: initialData.date,
+            // Funnel: daily values so the user edits what they see in the table
+            installTotal: initialData.installDay,
+            paywallShownTotal: initialData.paywallShownDay,
+            trialStartedTotal: initialData.trialStartedDay,
+            subscriptionStartedTotal: initialData.subscriptionStartedDay,
+            subscriptionCancelledTotal: initialData.subscriptionCancelledDay,
+            paymentFailedTotal: initialData.paymentFailedDay,
+            // Active subscriptions: snapshot total (not a flow, edit directly)
+            subscriptionActiveTotal: initialData.subscriptionActiveTotal,
+            // Financial: already per-day
+            adSpend: initialData.adSpend,
+            revenueDay: initialData.revenueDay,
+            refundsDay: initialData.refundsDay,
+          }
+        : {
+            date: todayIso(),
+            installTotal: 0,
+            paywallShownTotal: 0,
+            trialStartedTotal: 0,
+            subscriptionStartedTotal: 0,
+            subscriptionCancelledTotal: 0,
+            paymentFailedTotal: 0,
+            subscriptionActiveTotal: 0,
+            adSpend: 0,
+            revenueDay: 0,
+            refundsDay: 0,
+          },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
+
+  /**
+   * Convert a form's day-value back to the cumulative total needed by the API:
+   *   newTotal = (currentTotal - currentDay) + newDayValue
+   * This keeps all previous days intact and only changes the contribution of this day.
+   */
+  function dayToTotal(fieldTotal: number, fieldDay: number, formDayValue: number): number {
+    const prevTotal = fieldTotal - fieldDay;
+    return prevTotal + formDayValue;
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -207,25 +308,70 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
     setLoading(true);
     const formData = new FormData(event.currentTarget);
 
-    // In edit mode the date is fixed; in create mode read it from the form input
     const dateValue = isEditMode
       ? defaults.date
       : ((formData.get("date") as string) || defaults.date);
 
-    const payload: ReportFormPayload = {
-      appId,
-      date: dateValue,
-      installTotal: numberFrom(formData, "installTotal"),
-      paywallShownTotal: numberFrom(formData, "paywallShownTotal"),
-      trialStartedTotal: numberFrom(formData, "trialStartedTotal"),
-      subscriptionStartedTotal: numberFrom(formData, "subscriptionStartedTotal"),
-      subscriptionCancelledTotal: numberFrom(formData, "subscriptionCancelledTotal"),
-      paymentFailedTotal: numberFrom(formData, "paymentFailedTotal"),
-      subscriptionActiveTotal: numberFrom(formData, "subscriptionActiveTotal"),
-      adSpend: numberFrom(formData, "adSpend"),
-      revenueDay: numberFrom(formData, "revenueDay"),
-      refundsDay: numberFrom(formData, "refundsDay"),
-    };
+    let payload: ReportFormPayload;
+
+    if (isEditMode && initialData) {
+      // Edit mode: form has DAY values → convert back to cumulative totals
+      payload = {
+        appId,
+        date: dateValue,
+        installTotal: dayToTotal(
+          initialData.installTotal,
+          initialData.installDay,
+          numberFrom(formData, "installTotal")
+        ),
+        paywallShownTotal: dayToTotal(
+          initialData.paywallShownTotal,
+          initialData.paywallShownDay,
+          numberFrom(formData, "paywallShownTotal")
+        ),
+        trialStartedTotal: dayToTotal(
+          initialData.trialStartedTotal,
+          initialData.trialStartedDay,
+          numberFrom(formData, "trialStartedTotal")
+        ),
+        subscriptionStartedTotal: dayToTotal(
+          initialData.subscriptionStartedTotal,
+          initialData.subscriptionStartedDay,
+          numberFrom(formData, "subscriptionStartedTotal")
+        ),
+        subscriptionCancelledTotal: dayToTotal(
+          initialData.subscriptionCancelledTotal,
+          initialData.subscriptionCancelledDay,
+          numberFrom(formData, "subscriptionCancelledTotal")
+        ),
+        paymentFailedTotal: dayToTotal(
+          initialData.paymentFailedTotal,
+          initialData.paymentFailedDay,
+          numberFrom(formData, "paymentFailedTotal")
+        ),
+        // subscriptionActiveTotal: edited directly as a snapshot
+        subscriptionActiveTotal: numberFrom(formData, "subscriptionActiveTotal"),
+        adSpend: numberFrom(formData, "adSpend"),
+        revenueDay: numberFrom(formData, "revenueDay"),
+        refundsDay: numberFrom(formData, "refundsDay"),
+      };
+    } else {
+      // Create mode: form has cumulative totals
+      payload = {
+        appId,
+        date: dateValue,
+        installTotal: numberFrom(formData, "installTotal"),
+        paywallShownTotal: numberFrom(formData, "paywallShownTotal"),
+        trialStartedTotal: numberFrom(formData, "trialStartedTotal"),
+        subscriptionStartedTotal: numberFrom(formData, "subscriptionStartedTotal"),
+        subscriptionCancelledTotal: numberFrom(formData, "subscriptionCancelledTotal"),
+        paymentFailedTotal: numberFrom(formData, "paymentFailedTotal"),
+        subscriptionActiveTotal: numberFrom(formData, "subscriptionActiveTotal"),
+        adSpend: numberFrom(formData, "adSpend"),
+        revenueDay: numberFrom(formData, "revenueDay"),
+        refundsDay: numberFrom(formData, "refundsDay"),
+      };
+    }
 
     try {
       await onSubmit(payload);
@@ -278,7 +424,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
               </h2>
               <p className="text-xs text-muted">
                 {isEditMode
-                  ? `Изменение данных за ${defaults.date}`
+                  ? `Дневные значения за ${defaults.date}`
                   : "Введите кумулятивные данные из аналитики"}
               </p>
             </div>
@@ -324,12 +470,28 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
           </div>
         </div>
 
+        {/* Edit-mode info banner */}
+        {isEditMode && (
+          <div className="mx-6 mt-4 flex items-start gap-2.5 rounded-xl border border-primary/20 bg-primary/[0.06] px-4 py-3">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <p className="text-xs text-primarySoft/80 leading-relaxed">
+              В режиме редактирования поля воронки показывают{" "}
+              <span className="font-semibold text-primarySoft">дневные значения</span> — именно то,
+              что отображается в таблице. Кумулятивные тоталы пересчитываются автоматически.
+            </p>
+          </div>
+        )}
+
         {/* Tab switcher */}
-        <div className="flex border-b border-border/55 px-6 pt-4">
+        <div className="flex border-b border-border/55 px-6 pt-4 mt-2">
           {(
             [
-              { key: "funnel" as TabKey, label: "Воронка", count: FUNNEL_FIELDS.length },
-              { key: "financial" as TabKey, label: "Финансы", count: FINANCIAL_FIELDS.length },
+              { key: "funnel" as TabKey, label: isEditMode ? "Воронка (за день)" : "Воронка (тоталы)", count: funnelFields.length },
+              { key: "financial" as TabKey, label: "Финансы (за день)", count: FINANCIAL_FIELDS.length },
             ] as const
           ).map((tab) => (
             <button
@@ -355,12 +517,12 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
           ))}
         </div>
 
-        {/* Fields — IMPORTANT: both tabs are always rendered (CSS display:none),
-            so all inputs stay in the DOM and FormData captures all values */}
+        {/* Fields — BOTH tab panels stay in DOM (CSS display:none) so FormData
+            captures all values regardless of which tab is currently active */}
         <div className="px-6 py-5">
           <div style={{ display: activeTab === "funnel" ? undefined : "none" }}>
             <div className="grid gap-3 sm:grid-cols-2">
-              {FUNNEL_FIELDS.map((field) => (
+              {funnelFields.map((field) => (
                 <label key={field.name} className="block group">
                   <div className="flex items-center gap-1.5 mb-1.5">
                     <span style={{ color: field.color }} className="opacity-75">
@@ -401,7 +563,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
                       name={field.name}
                       type="number"
                       min={0}
-                      step={field.step}
+                      step="0.01"
                       defaultValue={defaults[field.name as keyof typeof defaults]}
                       className="input-field py-2.5 pl-7"
                       placeholder="0.00"
@@ -442,18 +604,10 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
           </div>
 
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="btn btn-ghost py-2.5 px-4 text-sm"
-            >
+            <button type="button" onClick={onClose} className="btn btn-ghost py-2.5 px-4 text-sm">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn btn-primary py-2.5 px-5 text-sm"
-            >
+            <button type="submit" disabled={loading} className="btn btn-primary py-2.5 px-5 text-sm">
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="h-3.5 w-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
