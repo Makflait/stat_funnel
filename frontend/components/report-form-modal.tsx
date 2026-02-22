@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import type { Report } from "@/lib/types";
 
 export interface ReportFormPayload {
   appId: string;
@@ -22,6 +23,7 @@ interface Props {
   appId: string;
   onClose: () => void;
   onSubmit: (payload: ReportFormPayload) => Promise<void>;
+  initialData?: Report;
 }
 
 function numberFrom(formData: FormData, key: string) {
@@ -174,25 +176,27 @@ const FINANCIAL_FIELDS = [
 
 type TabKey = "funnel" | "financial";
 
-export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
+export default function ReportFormModal({ appId, onClose, onSubmit, initialData }: Props) {
+  const isEditMode = !!initialData;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("funnel");
 
   const defaults = useMemo(
     () => ({
-      date: todayIso(),
-      installTotal: 0,
-      paywallShownTotal: 0,
-      trialStartedTotal: 0,
-      subscriptionStartedTotal: 0,
-      subscriptionCancelledTotal: 0,
-      paymentFailedTotal: 0,
-      subscriptionActiveTotal: 0,
-      adSpend: 0,
-      revenueDay: 0,
-      refundsDay: 0,
+      date: initialData?.date ?? todayIso(),
+      installTotal: initialData?.installTotal ?? 0,
+      paywallShownTotal: initialData?.paywallShownTotal ?? 0,
+      trialStartedTotal: initialData?.trialStartedTotal ?? 0,
+      subscriptionStartedTotal: initialData?.subscriptionStartedTotal ?? 0,
+      subscriptionCancelledTotal: initialData?.subscriptionCancelledTotal ?? 0,
+      paymentFailedTotal: initialData?.paymentFailedTotal ?? 0,
+      subscriptionActiveTotal: initialData?.subscriptionActiveTotal ?? 0,
+      adSpend: initialData?.adSpend ?? 0,
+      revenueDay: initialData?.revenueDay ?? 0,
+      refundsDay: initialData?.refundsDay ?? 0,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
@@ -204,7 +208,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
 
     const payload: ReportFormPayload = {
       appId,
-      date: String(formData.get("date") || defaults.date),
+      date: defaults.date,
       installTotal: numberFrom(formData, "installTotal"),
       paywallShownTotal: numberFrom(formData, "paywallShownTotal"),
       trialStartedTotal: numberFrom(formData, "trialStartedTotal"),
@@ -222,7 +226,11 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
       onClose();
     } catch (submitError) {
       setError(
-        submitError instanceof Error ? submitError.message : "Не удалось создать отчёт"
+        submitError instanceof Error
+          ? submitError.message
+          : isEditMode
+          ? "Не удалось сохранить изменения"
+          : "Не удалось создать отчёт"
       );
     } finally {
       setLoading(false);
@@ -244,16 +252,29 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
         <div className="flex items-center justify-between border-b border-border/55 px-6 py-5">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/25">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="12" y1="18" x2="12" y2="12" />
-                <line x1="9" y1="15" x2="15" y2="15" />
-              </svg>
+              {isEditMode ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <line x1="9" y1="15" x2="15" y2="15" />
+                </svg>
+              )}
             </div>
             <div>
-              <h2 className="text-base font-semibold text-text">Создать ежедневный отчёт</h2>
-              <p className="text-xs text-muted">Введите кумулятивные данные из аналитики</p>
+              <h2 className="text-base font-semibold text-text">
+                {isEditMode ? "Редактировать отчёт" : "Создать ежедневный отчёт"}
+              </h2>
+              <p className="text-xs text-muted">
+                {isEditMode
+                  ? `Изменение данных за ${defaults.date}`
+                  : "Введите кумулятивные данные из аналитики"}
+              </p>
             </div>
           </div>
           <button
@@ -270,19 +291,31 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
 
         {/* Date field */}
         <div className="border-b border-border/55 px-6 py-4">
-          <label className="flex items-center gap-4">
+          <div className="flex items-center gap-4">
             <div>
               <p className="text-sm font-medium text-text">Дата отчёта</p>
               <p className="text-xs text-muted mt-0.5">За какой день вносятся данные</p>
             </div>
-            <input
-              name="date"
-              type="date"
-              defaultValue={defaults.date}
-              required
-              className="input-field max-w-[200px] ml-auto py-2.5"
-            />
-          </label>
+            {isEditMode ? (
+              <div className="ml-auto flex items-center gap-2 rounded-xl border border-border/60 bg-panel/60 px-4 py-2.5">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                  <line x1="16" y1="2" x2="16" y2="6" />
+                  <line x1="8" y1="2" x2="8" y2="6" />
+                  <line x1="3" y1="10" x2="21" y2="10" />
+                </svg>
+                <span className="mono text-sm text-text">{defaults.date}</span>
+              </div>
+            ) : (
+              <input
+                name="date"
+                type="date"
+                defaultValue={defaults.date}
+                required
+                className="input-field max-w-[200px] ml-auto py-2.5"
+              />
+            )}
+          </div>
         </div>
 
         {/* Tab switcher */}
@@ -333,7 +366,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
                     type="number"
                     min={0}
                     step={1}
-                    defaultValue={0}
+                    defaultValue={defaults[field.name as keyof typeof defaults]}
                     className="input-field py-2.5"
                     placeholder="0"
                   />
@@ -360,7 +393,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
                       type="number"
                       min={0}
                       step={field.step}
-                      defaultValue={0}
+                      defaultValue={defaults[field.name as keyof typeof defaults]}
                       className="input-field py-2.5 pl-7"
                       placeholder="0.00"
                     />
@@ -387,7 +420,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-border/55 px-6 py-4">
           <div className="flex gap-2">
-            {(["funnel", "financial"] as TabKey[]).map((tab, i) => (
+            {(["funnel", "financial"] as TabKey[]).map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -419,10 +452,17 @@ export default function ReportFormModal({ appId, onClose, onSubmit }: Props) {
                 </span>
               ) : (
                 <span className="flex items-center gap-2">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  Сохранить отчёт
+                  {isEditMode ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                  {isEditMode ? "Сохранить изменения" : "Сохранить отчёт"}
                 </span>
               )}
             </button>

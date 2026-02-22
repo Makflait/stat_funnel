@@ -228,6 +228,104 @@ router.post("/", async (req, res, next) => {
   }
 });
 
+const updateReportSchema = z.object({
+  installTotal: z.number().int().nonnegative(),
+  paywallShownTotal: z.number().int().nonnegative(),
+  trialStartedTotal: z.number().int().nonnegative(),
+  subscriptionStartedTotal: z.number().int().nonnegative(),
+  subscriptionCancelledTotal: z.number().int().nonnegative(),
+  paymentFailedTotal: z.number().int().nonnegative(),
+  subscriptionActiveTotal: z.number().int().nonnegative(),
+  adSpend: z.number().nonnegative().default(0),
+  revenueDay: z.number().nonnegative().default(0),
+  refundsDay: z.number().nonnegative().default(0),
+  confirmNegativeDeltas: z.boolean().optional().default(false),
+});
+
+router.put("/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const payload = updateReportSchema.parse(req.body);
+
+    const existing = await prisma.report.findUnique({
+      where: { id },
+      select: { id: true, appId: true, date: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
+    await assertAppOwnership(existing.appId, req.user!.id);
+
+    const currentTotals: CumulativeTotals = {
+      installTotal: payload.installTotal,
+      paywallShownTotal: payload.paywallShownTotal,
+      trialStartedTotal: payload.trialStartedTotal,
+      subscriptionStartedTotal: payload.subscriptionStartedTotal,
+      subscriptionCancelledTotal: payload.subscriptionCancelledTotal,
+      paymentFailedTotal: payload.paymentFailedTotal,
+      subscriptionActiveTotal: payload.subscriptionActiveTotal,
+    };
+
+    const previousReport = await prisma.report.findFirst({
+      where: {
+        appId: existing.appId,
+        date: { lt: existing.date },
+      },
+      orderBy: { date: "desc" },
+    });
+
+    const previousTotals = previousReport ? extractTotals(previousReport) : null;
+    const { deltas, negativeDeltas, netGrowthDay } = calculateDeltas(currentTotals, previousTotals);
+
+    if (negativeDeltas.length && !payload.confirmNegativeDeltas) {
+      return res.status(409).json({
+        code: "NEGATIVE_DELTAS",
+        message:
+          "One or more cumulative totals are lower than yesterday. Confirm with confirmNegativeDeltas=true.",
+        negativeDeltas,
+      });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const upd = await tx.report.update({
+        where: { id },
+        data: {
+          installTotal: payload.installTotal,
+          paywallShownTotal: payload.paywallShownTotal,
+          trialStartedTotal: payload.trialStartedTotal,
+          subscriptionStartedTotal: payload.subscriptionStartedTotal,
+          subscriptionCancelledTotal: payload.subscriptionCancelledTotal,
+          paymentFailedTotal: payload.paymentFailedTotal,
+          subscriptionActiveTotal: payload.subscriptionActiveTotal,
+          ...deltas,
+          netGrowthDay,
+          adSpend: payload.adSpend,
+          revenueDay: payload.revenueDay,
+          refundsDay: payload.refundsDay,
+        },
+      });
+
+      await recalculateFromDate(tx, existing.appId, existing.date);
+
+      return upd;
+    });
+
+    const latest = await prisma.report.findUnique({ where: { id: updated.id } });
+
+    return res.status(200).json({
+      report: serializeReport(latest ?? updated),
+      warnings: negativeDeltas.length ? { negativeDeltas } : null,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "App not found") {
+      return res.status(404).json({ message: error.message });
+    }
+    return next(error);
+  }
+});
+
 router.get("/export", async (req, res, next) => {
   try {
     const query = reportsQuerySchema.parse(req.query);

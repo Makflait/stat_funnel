@@ -14,7 +14,7 @@ import {
 import { apiRequest, buildApiUrl } from "@/lib/api";
 import { clearToken, getToken } from "@/lib/auth";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
-import type { AppItem, DashboardResponse, Kpis } from "@/lib/types";
+import type { AppItem, DashboardResponse, Kpis, Report } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -91,13 +91,11 @@ function rangeFromPeriod(period: Period, customFrom: string, customTo: string) {
 function buildFunnelBlocks(funnel: DashboardResponse["funnel"] | undefined): FunnelBlock[] {
   if (!funnel?.length) return [];
   const baseValue = Math.max(funnel[0].value, 1);
-  let previousWidth = 100;
 
   return funnel.map((stage, index) => {
+    // Real percentage for visual width, min 12% so last stages are still visible
     const rawWidth = index === 0 ? 100 : Math.round((stage.value / baseValue) * 100);
-    const upperBound = Math.max(38, previousWidth - 4);
-    const widthPercent = index === 0 ? 100 : Math.max(38, Math.min(upperBound, rawWidth));
-    previousWidth = widthPercent;
+    const widthPercent = index === 0 ? 100 : Math.max(12, rawWidth);
     const [gradientFrom, gradientTo] = FUNNEL_GRADIENTS[index % FUNNEL_GRADIENTS.length];
     return {
       key: stage.key,
@@ -120,9 +118,9 @@ async function parseErrorResponse(response: Response) {
   return body;
 }
 
-// ─── Custom hook: count-up animation ─────────────────────────────────────────
+// ─── Custom hook: lightweight count-up animation ──────────────────────────────
 
-function useCountUp(target: number, duration = 950, decimals = 0): number {
+function useCountUp(target: number, duration = 350, decimals = 0): number {
   const [count, setCount] = useState(0);
   const rafRef = useRef<number>(0);
 
@@ -246,11 +244,18 @@ const IconWarning = () => (
   </svg>
 );
 
+const IconEdit = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+  </svg>
+);
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function KpiCard({ label, rawValue, formatted, valueType, icon, iconBg, iconColor, description, delay }: KpiCardData) {
   const decimals = valueType === "currency" ? 2 : valueType === "percent" ? 1 : 0;
-  const count = useCountUp(rawValue, 950, decimals);
+  const count = useCountUp(rawValue, 350, decimals);
 
   const displayValue =
     formatted === "-"
@@ -330,6 +335,126 @@ function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
   );
 }
 
+// ─── Funnel Component ─────────────────────────────────────────────────────────
+
+function FunnelChart({ blocks, visible }: { blocks: FunnelBlock[]; visible: boolean }) {
+  if (!blocks.length) return null;
+
+  return (
+    <div className="mt-6 flex flex-col items-center gap-0">
+      {blocks.map((block, index) => {
+        const nextBlock = blocks[index + 1];
+        const dropOffCount = nextBlock ? block.value - nextBlock.value : null;
+        const dropOffPct = nextBlock && block.value > 0
+          ? Math.round((dropOffCount! / block.value) * 100)
+          : null;
+
+        return (
+          <div key={block.key} className="flex w-full flex-col items-center">
+            {/* ── Funnel bar ── */}
+            <div
+              className="relative overflow-hidden text-white"
+              style={{
+                width: visible ? `${block.widthPercent}%` : "10%",
+                minWidth: "200px",
+                background: `linear-gradient(135deg, ${block.gradientFrom}f0, ${block.gradientTo})`,
+                borderRadius: index === 0 ? "12px 12px 0 0" : index === blocks.length - 1 ? "0 0 12px 12px" : "0",
+                transition: `width 450ms cubic-bezier(0.22, 1, 0.36, 1) ${index * 70}ms, opacity 280ms ease ${index * 55}ms`,
+                opacity: visible ? 1 : 0,
+                boxShadow: visible ? `0 2px 16px ${block.gradientFrom}45` : "none",
+                borderLeft: "1px solid rgba(255,255,255,0.12)",
+                borderRight: "1px solid rgba(255,255,255,0.12)",
+                borderTop: index === 0 ? "1px solid rgba(255,255,255,0.18)" : "none",
+                borderBottom: index === blocks.length - 1 ? "1px solid rgba(255,255,255,0.10)" : "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              {/* Top-shine overlay */}
+              <div className="absolute inset-0 bg-gradient-to-b from-white/[0.14] via-transparent to-black/[0.08] pointer-events-none" />
+
+              <div className="relative z-10 flex items-center justify-between px-5 py-3.5 gap-4">
+                {/* Left: stage info */}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[9px] font-bold text-white flex-shrink-0">
+                      {index + 1}
+                    </span>
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-white/65 truncate">
+                      {block.label}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-[1.5rem] font-semibold leading-none stat-number">
+                    {formatNumber(block.value)}
+                  </p>
+                </div>
+
+                {/* Right: conversion badges */}
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  {block.percentFromPrevious !== null && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-white/18 px-2.5 py-1 text-[11px] font-semibold text-white">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+                        <path d="M20 12l-8 8-8-8" />
+                      </svg>
+                      {formatPercent(block.percentFromPrevious)}
+                    </span>
+                  )}
+                  {index > 0 && block.percentFromInstalls !== null && (
+                    <span className="text-[10px] text-white/45">
+                      {formatPercent(block.percentFromInstalls)} от старта
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Connector: drop-off info ── */}
+            {index < blocks.length - 1 && (
+              <div
+                className="flex flex-col items-center py-1"
+                style={{
+                  opacity: visible ? 1 : 0,
+                  transition: `opacity 300ms ease ${(index + 1) * 70 + 200}ms`,
+                }}
+              >
+                {/* Drop-off pill */}
+                {dropOffCount !== null && dropOffCount > 0 && (
+                  <div className="flex items-center gap-1.5 rounded-full border border-danger/20 bg-danger/[0.06] px-3 py-0.5 text-[11px] text-dangerSoft/75">
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <polyline points="19 12 12 19 5 12" />
+                    </svg>
+                    <span>−{formatNumber(dropOffCount)}</span>
+                    {dropOffPct !== null && (
+                      <span className="opacity-60">({dropOffPct}% отсеялись)</span>
+                    )}
+                  </div>
+                )}
+                {/* Arrow */}
+                <svg width="10" height="7" viewBox="0 0 10 7" fill="currentColor" className="text-border/40 mt-0.5">
+                  <path d="M5 7L0 0h10z" />
+                </svg>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Summary row */}
+      <div className="mt-4 flex w-full items-center justify-center gap-6 flex-wrap">
+        {blocks.map((block) => (
+          <div key={block.key} className="flex items-center gap-2 text-xs text-muted">
+            <span
+              className="h-2 w-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: block.gradientFrom }}
+            />
+            <span>{block.label}</span>
+            <span className="mono font-medium text-text">{formatNumber(block.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function DashboardClient() {
@@ -341,6 +466,7 @@ export default function DashboardClient() {
   const [customFrom, setCustomFrom] = useState(shiftDays(todayIso(), -29));
   const [customTo, setCustomTo] = useState(todayIso());
   const [showReportForm, setShowReportForm] = useState(false);
+  const [editingReport, setEditingReport] = useState<Report | null>(null);
   const [showAppForm, setShowAppForm] = useState(false);
   const [newAppName, setNewAppName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -374,7 +500,7 @@ export default function DashboardClient() {
   useEffect(() => {
     setFunnelVisible(false);
     if (funnelBlocks.length > 0) {
-      const t = setTimeout(() => setFunnelVisible(true), 120);
+      const t = setTimeout(() => setFunnelVisible(true), 80);
       return () => clearTimeout(t);
     }
   }, [funnelBlocks.length, dashboard]);
@@ -463,6 +589,38 @@ export default function DashboardClient() {
     await loadDashboard(payload.appId, range.from, range.to);
   }
 
+  async function updateReport(
+    reportId: string,
+    payload: ReportFormPayload,
+    forceConfirm = false
+  ): Promise<void> {
+    const token = getToken();
+    const response = await fetch(buildApiUrl(`/reports/${reportId}`), {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ ...payload, confirmNegativeDeltas: forceConfirm }),
+    });
+
+    if (!response.ok) {
+      const body = await parseErrorResponse(response);
+      if (body && "code" in body && body.code === "NEGATIVE_DELTAS" && !forceConfirm) {
+        const details = body.negativeDeltas.map((d) => `${d.field}: ${d.value}`).join("\n");
+        const accepted = window.confirm(
+          `${body.message}\n\n${details}\n\nСохранить изменения несмотря на это?`
+        );
+        if (accepted) return updateReport(reportId, payload, true);
+        throw new Error("Изменения не сохранены");
+      }
+      const message = body && "message" in body ? body.message : null;
+      throw new Error(message || `Ошибка обновления отчёта: ${response.status}`);
+    }
+
+    await loadDashboard(payload.appId, range.from, range.to);
+  }
+
   async function exportCsv() {
     if (!selectedAppId) return;
     const token = getToken();
@@ -510,7 +668,7 @@ export default function DashboardClient() {
         iconBg: "rgba(6, 182, 212, 0.14)",
         iconColor: "#22d3ee",
         description: "Конверсия: пейвол → триал",
-        delay: 80,
+        delay: 60,
       },
       {
         label: "CR Trial → Subscription",
@@ -521,7 +679,7 @@ export default function DashboardClient() {
         iconBg: "rgba(16, 185, 129, 0.14)",
         iconColor: "#34d399",
         description: "Конверсия: триал → подписка",
-        delay: 160,
+        delay: 120,
       },
       {
         label: "Net Subscription Growth",
@@ -532,7 +690,7 @@ export default function DashboardClient() {
         iconBg: netIsPositive ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.13)",
         iconColor: netIsPositive ? "#34d399" : "#f87171",
         description: "Новые − отменённые подписки",
-        delay: 240,
+        delay: 180,
       },
       {
         label: "Активные подписки",
@@ -543,7 +701,7 @@ export default function DashboardClient() {
         iconBg: "rgba(99, 102, 241, 0.14)",
         iconColor: "#818cf8",
         description: "Всего активных подписок",
-        delay: 320,
+        delay: 240,
       },
       {
         label: "ARPU",
@@ -554,7 +712,7 @@ export default function DashboardClient() {
         iconBg: "rgba(245, 158, 11, 0.14)",
         iconColor: "#fbbf24",
         description: "Средний доход на пользователя",
-        delay: 400,
+        delay: 300,
       },
       {
         label: "CAC",
@@ -565,7 +723,7 @@ export default function DashboardClient() {
         iconBg: "rgba(239, 68, 68, 0.12)",
         iconColor: "#f87171",
         description: "Стоимость привлечения (CAC)",
-        delay: 480,
+        delay: 360,
       },
     ];
   }, [dashboard?.kpis]);
@@ -588,10 +746,9 @@ export default function DashboardClient() {
 
   return (
     <main className="relative min-h-screen overflow-x-hidden px-4 py-6 sm:px-6 lg:px-10">
-      {/* Background ambient blobs */}
-      <div className="pointer-events-none fixed left-[-180px] top-[-120px] h-[560px] w-[560px] rounded-full bg-primary/[0.14] blur-[120px] animate-floatPulse" />
-      <div className="pointer-events-none fixed right-[-120px] top-[300px] h-[450px] w-[450px] rounded-full bg-accent/[0.07] blur-[100px] animate-floatPulseAlt" />
-      <div className="pointer-events-none fixed bottom-[-120px] left-[35%] h-[380px] w-[380px] rounded-full bg-primary/[0.09] blur-[100px] animate-floatPulseSlow" />
+      {/* Background ambient blobs — static, no animation to avoid GPU lag */}
+      <div className="pointer-events-none fixed left-[-180px] top-[-120px] h-[560px] w-[560px] rounded-full bg-primary/[0.10] blur-[100px]" />
+      <div className="pointer-events-none fixed right-[-120px] top-[300px] h-[450px] w-[450px] rounded-full bg-accent/[0.05] blur-[90px]" />
 
       <section className="relative z-10 mx-auto max-w-7xl space-y-5">
 
@@ -780,85 +937,21 @@ export default function DashboardClient() {
             {funnelBlocks.length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="badge badge-violet">{funnelBlocks.length} этапов</span>
+                {dashboard?.latest && (
+                  <span className="badge badge-success">
+                    CR: {formatPercent(
+                      funnelBlocks.length >= 4
+                        ? (funnelBlocks[3].value / Math.max(funnelBlocks[0].value, 1)) * 100
+                        : null
+                    )}
+                  </span>
+                )}
               </div>
             )}
           </div>
 
           {funnelBlocks.length > 0 ? (
-            <div className="mt-6 flex flex-col items-center gap-1.5">
-              {funnelBlocks.map((block, index) => (
-                <div key={block.key} className="flex w-full flex-col items-center">
-                  {/* Funnel bar */}
-                  <div
-                    className="relative overflow-hidden border border-white/10 text-white"
-                    style={{
-                      width: funnelVisible ? `${block.widthPercent}%` : "18%",
-                      clipPath: "polygon(2.5% 0%, 97.5% 0%, 100% 100%, 0% 100%)",
-                      background: `linear-gradient(118deg, ${block.gradientFrom}ee, ${block.gradientTo})`,
-                      transition: `width 950ms cubic-bezier(0.34, 1.4, 0.64, 1) ${index * 110}ms, opacity 450ms ease ${index * 80}ms`,
-                      opacity: funnelVisible ? 1 : 0,
-                      boxShadow: `0 6px 28px ${block.gradientFrom}50`,
-                      minWidth: 0,
-                    }}
-                  >
-                    {/* Shine overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-b from-white/[0.13] to-transparent pointer-events-none" />
-                    {/* Moving shimmer */}
-                    <div
-                      className="absolute inset-0 pointer-events-none"
-                      style={{
-                        background:
-                          "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%)",
-                        animation: "shimmer 4s linear infinite",
-                        backgroundSize: "200% 100%",
-                        opacity: 0.6,
-                      }}
-                    />
-
-                    <div className="relative z-10 flex flex-col gap-1 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="mono text-[10px] uppercase tracking-[0.18em] text-white/70">
-                          {block.label}
-                        </p>
-                        <p className="mt-0.5 text-[1.6rem] font-semibold leading-none stat-number">
-                          {formatNumber(block.value)}
-                        </p>
-                      </div>
-                      <div className="flex gap-4 text-white/80 sm:flex-col sm:items-end sm:gap-0.5">
-                        <p className="text-xs">
-                          <span className="opacity-55">от пред. </span>
-                          <span className="font-semibold text-white/95">
-                            {formatPercent(block.percentFromPrevious)}
-                          </span>
-                        </p>
-                        <p className="text-xs">
-                          <span className="opacity-55">от инстал. </span>
-                          <span className="font-semibold text-white/95">
-                            {formatPercent(block.percentFromInstalls)}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Connector arrow */}
-                  {index < funnelBlocks.length - 1 && (
-                    <div
-                      className="funnel-arrow"
-                      style={{
-                        opacity: funnelVisible ? 0.45 : 0,
-                        transitionDelay: `${(index + 1) * 110 + 400}ms`,
-                        transition: "opacity 400ms ease",
-                      }}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 16.5l-7.5-9h15z" />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+            <FunnelChart blocks={funnelBlocks} visible={funnelVisible} />
           ) : (
             <div className="mt-8 flex flex-col items-center gap-4 py-10 text-center">
               <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-panel/70">
@@ -955,7 +1048,7 @@ export default function DashboardClient() {
                     fill="url(#colorInstalls)"
                     dot={false}
                     activeDot={{ r: 5, fill: "#8b5cf6", strokeWidth: 2.5, stroke: "#130f22" }}
-                    animationDuration={1200}
+                    animationDuration={500}
                   />
                   <Area
                     type="monotone"
@@ -965,7 +1058,7 @@ export default function DashboardClient() {
                     fill="url(#colorSubs)"
                     dot={false}
                     activeDot={{ r: 5, fill: "#10b981", strokeWidth: 2.5, stroke: "#130f22" }}
-                    animationDuration={1400}
+                    animationDuration={600}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -1004,7 +1097,7 @@ export default function DashboardClient() {
                 ))}
               </div>
             ) : (
-              <table className="w-full min-w-[820px] border-collapse text-left">
+              <table className="w-full min-w-[880px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-border/55 bg-panel/40">
                     <th className="px-5 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
@@ -1028,13 +1121,14 @@ export default function DashboardClient() {
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Net Growth
                     </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark w-10" />
                   </tr>
                 </thead>
                 <tbody>
                   {(dashboard?.table ?? []).map((row, rowIndex) => (
                     <tr
                       key={row.id}
-                      className={`border-b border-border/35 table-row-hover text-sm ${
+                      className={`border-b border-border/35 table-row-hover text-sm group ${
                         rowIndex % 2 === 0 ? "" : "bg-white/[0.013]"
                       }`}
                     >
@@ -1062,11 +1156,20 @@ export default function DashboardClient() {
                         {row.netGrowthDay >= 0 ? "+" : ""}
                         {formatNumber(row.netGrowthDay)}
                       </td>
+                      <td className="px-4 py-3.5">
+                        <button
+                          onClick={() => setEditingReport(row)}
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark opacity-0 transition-all duration-150 hover:border-primary/40 hover:bg-primary/10 hover:text-primarySoft group-hover:opacity-100"
+                          title="Редактировать"
+                        >
+                          <IconEdit />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {(dashboard?.table ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-5 py-14 text-center">
+                      <td colSpan={8} className="px-5 py-14 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <div className="h-12 w-12 rounded-2xl border border-border bg-panel/50 flex items-center justify-center">
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mutedDark">
@@ -1091,12 +1194,22 @@ export default function DashboardClient() {
         <div className="h-6" />
       </section>
 
-      {/* ── Report Form Modal ── */}
+      {/* ── Create Report Modal ── */}
       {showReportForm && selectedAppId ? (
         <ReportFormModal
           appId={selectedAppId}
           onClose={() => setShowReportForm(false)}
           onSubmit={(payload) => createReport(payload)}
+        />
+      ) : null}
+
+      {/* ── Edit Report Modal ── */}
+      {editingReport ? (
+        <ReportFormModal
+          appId={editingReport.appId}
+          initialData={editingReport}
+          onClose={() => setEditingReport(null)}
+          onSubmit={(payload) => updateReport(editingReport.id, payload)}
         />
       ) : null}
     </main>
