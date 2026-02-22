@@ -61,12 +61,13 @@ const FUNNEL_LABELS: Record<string, string> = {
   active: "Активные подписки",
 };
 
+// Funnel colour progression: teal → ocean blue → indigo → violet → fuchsia
 const FUNNEL_GRADIENTS: Array<[string, string]> = [
-  ["#7c3aed", "#5b21b6"],
-  ["#2563eb", "#1d4ed8"],
-  ["#0891b2", "#0e7490"],
-  ["#059669", "#047857"],
-  ["#16a34a", "#15803d"],
+  ["#0d9488", "#0f766e"],
+  ["#0284c7", "#0369a1"],
+  ["#6366f1", "#4f46e5"],
+  ["#9333ea", "#7c3aed"],
+  ["#c026d3", "#a21caf"],
 ];
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
@@ -387,20 +388,18 @@ function FunnelChart({ blocks, visible }: { blocks: FunnelBlock[]; visible: bool
                   </p>
                 </div>
 
-                {/* Right: conversion badges */}
+                {/* Right: conversion from previous step only */}
                 <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                  {block.percentFromPrevious !== null && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-white/18 px-2.5 py-1 text-[11px] font-semibold text-white">
-                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+                  {block.percentFromPrevious !== null ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/18 px-2.5 py-1 text-[11px] font-semibold text-white">
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" className="opacity-60">
                         <path d="M20 12l-8 8-8-8" />
                       </svg>
                       {formatPercent(block.percentFromPrevious)}
+                      <span className="text-[9px] text-white/45 font-normal">от пред.</span>
                     </span>
-                  )}
-                  {index > 0 && block.percentFromInstalls !== null && (
-                    <span className="text-[10px] text-white/45">
-                      {formatPercent(block.percentFromInstalls)} от старта
-                    </span>
+                  ) : (
+                    <span className="text-[10px] text-white/40 italic">старт</span>
                   )}
                 </div>
               </div>
@@ -1097,7 +1096,7 @@ export default function DashboardClient() {
                 ))}
               </div>
             ) : (
-              <table className="w-full min-w-[880px] border-collapse text-left">
+              <table className="w-full min-w-[1080px] border-collapse text-left">
                 <thead>
                   <tr className="border-b border-border/55 bg-panel/40">
                     <th className="px-5 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
@@ -1107,7 +1106,16 @@ export default function DashboardClient() {
                       Инсталлы
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Пейвол
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Триал
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Подписки
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      Активные
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Отмены
@@ -1116,60 +1124,115 @@ export default function DashboardClient() {
                       Revenue
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
-                      Ad Spend
-                    </th>
-                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Net Growth
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark w-10" />
                   </tr>
                 </thead>
                 <tbody>
-                  {(dashboard?.table ?? []).map((row, rowIndex) => (
-                    <tr
-                      key={row.id}
-                      className={`border-b border-border/35 table-row-hover text-sm group ${
-                        rowIndex % 2 === 0 ? "" : "bg-white/[0.013]"
-                      }`}
-                    >
-                      <td className="mono px-5 py-3.5 text-[12px] text-muted">{row.date}</td>
-                      <td className="px-4 py-3.5 font-medium text-text">
-                        {formatNumber(row.installDay)}
-                      </td>
-                      <td className="px-4 py-3.5 font-medium text-primarySoft">
-                        {formatNumber(row.subscriptionStartedDay)}
-                      </td>
-                      <td className="px-4 py-3.5 text-warningSoft">
-                        {formatNumber(row.subscriptionCancelledDay)}
-                      </td>
-                      <td className="mono px-4 py-3.5 text-successSoft">
-                        {formatCurrency(row.revenueDay)}
-                      </td>
-                      <td className="mono px-4 py-3.5 text-muted">
-                        {formatCurrency(row.adSpend)}
-                      </td>
-                      <td
-                        className={`mono px-4 py-3.5 font-semibold ${
-                          row.netGrowthDay >= 0 ? "text-successSoft" : "text-dangerSoft"
+                  {(dashboard?.table ?? []).map((row, rowIndex) => {
+                    // Mini funnel conversion for this row
+                    const crInstall2Sub =
+                      row.installDay > 0 && row.subscriptionStartedDay > 0
+                        ? Math.round((row.subscriptionStartedDay / row.installDay) * 100)
+                        : null;
+
+                    return (
+                      <tr
+                        key={row.id}
+                        className={`border-b border-border/35 table-row-hover text-sm group ${
+                          rowIndex % 2 === 0 ? "" : "bg-white/[0.013]"
                         }`}
                       >
-                        {row.netGrowthDay >= 0 ? "+" : ""}
-                        {formatNumber(row.netGrowthDay)}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <button
-                          onClick={() => setEditingReport(row)}
-                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark opacity-0 transition-all duration-150 hover:border-primary/40 hover:bg-primary/10 hover:text-primarySoft group-hover:opacity-100"
-                          title="Редактировать"
+                        {/* Date */}
+                        <td className="px-5 py-3">
+                          <p className="mono text-[12px] text-muted">{row.date}</p>
+                          {crInstall2Sub !== null && (
+                            <p className="mt-0.5 text-[10px] text-primary/70">
+                              CR {crInstall2Sub}%
+                            </p>
+                          )}
+                        </td>
+                        {/* Installs */}
+                        <td className="px-4 py-3 font-medium text-text">
+                          {formatNumber(row.installDay)}
+                        </td>
+                        {/* Paywall */}
+                        <td className="px-4 py-3 text-primarySoft/80">
+                          <span className="font-medium">{formatNumber(row.paywallShownDay)}</span>
+                          {row.installDay > 0 && row.paywallShownDay > 0 && (
+                            <span className="ml-1.5 text-[10px] text-mutedDark">
+                              {Math.round((row.paywallShownDay / row.installDay) * 100)}%
+                            </span>
+                          )}
+                        </td>
+                        {/* Trial */}
+                        <td className="px-4 py-3 text-primarySoft/60">
+                          <span className="font-medium">{formatNumber(row.trialStartedDay)}</span>
+                          {row.paywallShownDay > 0 && row.trialStartedDay > 0 && (
+                            <span className="ml-1.5 text-[10px] text-mutedDark">
+                              {Math.round((row.trialStartedDay / row.paywallShownDay) * 100)}%
+                            </span>
+                          )}
+                        </td>
+                        {/* Subscriptions */}
+                        <td className="px-4 py-3 font-semibold text-successSoft">
+                          <span>{formatNumber(row.subscriptionStartedDay)}</span>
+                          {row.trialStartedDay > 0 && row.subscriptionStartedDay > 0 && (
+                            <span className="ml-1.5 text-[10px] font-normal text-mutedDark">
+                              {Math.round((row.subscriptionStartedDay / row.trialStartedDay) * 100)}%
+                            </span>
+                          )}
+                        </td>
+                        {/* Active total */}
+                        <td className="px-4 py-3">
+                          <span className="mono font-medium text-primarySoft">
+                            {formatNumber(row.subscriptionActiveTotal)}
+                          </span>
+                          <span className="ml-1 text-[10px] text-mutedDark">total</span>
+                        </td>
+                        {/* Cancels */}
+                        <td className="px-4 py-3 text-warningSoft">
+                          {row.subscriptionCancelledDay > 0 ? (
+                            <span className="text-dangerSoft/80">−{formatNumber(row.subscriptionCancelledDay)}</span>
+                          ) : (
+                            <span className="text-mutedDark">—</span>
+                          )}
+                        </td>
+                        {/* Revenue */}
+                        <td className="mono px-4 py-3 text-successSoft">
+                          {formatCurrency(row.revenueDay)}
+                          {row.refundsDay > 0 && (
+                            <p className="text-[10px] text-dangerSoft/60">
+                              −{formatCurrency(row.refundsDay)} ref
+                            </p>
+                          )}
+                        </td>
+                        {/* Net Growth */}
+                        <td
+                          className={`mono px-4 py-3 font-semibold ${
+                            row.netGrowthDay >= 0 ? "text-successSoft" : "text-dangerSoft"
+                          }`}
                         >
-                          <IconEdit />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          {row.netGrowthDay >= 0 ? "+" : ""}
+                          {formatNumber(row.netGrowthDay)}
+                        </td>
+                        {/* Edit */}
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => setEditingReport(row)}
+                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark opacity-0 transition-all duration-150 hover:border-primary/40 hover:bg-primary/10 hover:text-primarySoft group-hover:opacity-100"
+                            title="Редактировать"
+                          >
+                            <IconEdit />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {(dashboard?.table ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-5 py-14 text-center">
+                      <td colSpan={10} className="px-5 py-14 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <div className="h-12 w-12 rounded-2xl border border-border bg-panel/50 flex items-center justify-center">
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mutedDark">

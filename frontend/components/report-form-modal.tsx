@@ -50,7 +50,7 @@ const FUNNEL_FIELDS = [
         <line x1="12" y1="15" x2="12" y2="3" />
       </svg>
     ),
-    color: "#a78bfa",
+    color: "#2dd4bf",
   },
   {
     name: "paywallShownTotal",
@@ -62,7 +62,7 @@ const FUNNEL_FIELDS = [
         <line x1="1" y1="10" x2="23" y2="10" />
       </svg>
     ),
-    color: "#22d3ee",
+    color: "#38bdf8",
   },
   {
     name: "trialStartedTotal",
@@ -74,7 +74,7 @@ const FUNNEL_FIELDS = [
         <polyline points="12 6 12 12 16 14" />
       </svg>
     ),
-    color: "#34d399",
+    color: "#a78bfa",
   },
   {
     name: "subscriptionStartedTotal",
@@ -142,7 +142,7 @@ const FINANCIAL_FIELDS = [
         <path d="M2 12l10 5 10-5" />
       </svg>
     ),
-    color: "#a78bfa",
+    color: "#2dd4bf",
   },
   {
     name: "revenueDay",
@@ -155,7 +155,7 @@ const FINANCIAL_FIELDS = [
         <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
       </svg>
     ),
-    color: "#34d399",
+    color: "#4ade80",
   },
   {
     name: "refundsDay",
@@ -182,6 +182,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("funnel");
 
+  // Memoised once on mount so inputs keep their defaultValues across re-renders
   const defaults = useMemo(
     () => ({
       date: initialData?.date ?? todayIso(),
@@ -206,9 +207,14 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
     setLoading(true);
     const formData = new FormData(event.currentTarget);
 
+    // In edit mode the date is fixed; in create mode read it from the form input
+    const dateValue = isEditMode
+      ? defaults.date
+      : ((formData.get("date") as string) || defaults.date);
+
     const payload: ReportFormPayload = {
       appId,
-      date: defaults.date,
+      date: dateValue,
       installTotal: numberFrom(formData, "installTotal"),
       paywallShownTotal: numberFrom(formData, "paywallShownTotal"),
       trialStartedTotal: numberFrom(formData, "trialStartedTotal"),
@@ -253,12 +259,12 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 border border-primary/25">
               {isEditMode ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" strokeWidth="2">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </svg>
               ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" strokeWidth="2">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                   <polyline points="14 2 14 8 20 8" />
                   <line x1="12" y1="18" x2="12" y2="12" />
@@ -349,9 +355,10 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
           ))}
         </div>
 
-        {/* Fields */}
+        {/* Fields — IMPORTANT: both tabs are always rendered (CSS display:none),
+            so all inputs stay in the DOM and FormData captures all values */}
         <div className="px-6 py-5">
-          {activeTab === "funnel" ? (
+          <div style={{ display: activeTab === "funnel" ? undefined : "none" }}>
             <div className="grid gap-3 sm:grid-cols-2">
               {FUNNEL_FIELDS.map((field) => (
                 <label key={field.name} className="block group">
@@ -374,7 +381,9 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
                 </label>
               ))}
             </div>
-          ) : (
+          </div>
+
+          <div style={{ display: activeTab === "financial" ? undefined : "none" }}>
             <div className="grid gap-3 sm:grid-cols-3">
               {FINANCIAL_FIELDS.map((field) => (
                 <label key={field.name} className="block">
@@ -402,7 +411,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
                 </label>
               ))}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Error */}
