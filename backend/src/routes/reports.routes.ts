@@ -28,7 +28,6 @@ const reportSchema = z.object({
   adSpend: z.number().nonnegative().default(0),
   revenueDay: z.number().nonnegative().default(0),
   refundsDay: z.number().nonnegative().default(0),
-  confirmNegativeDeltas: z.boolean().optional().default(false),
 });
 
 const reportsQuerySchema = z.object({
@@ -178,16 +177,7 @@ router.post("/", async (req, res, next) => {
     };
 
     const previousTotals = previousReport ? extractTotals(previousReport) : null;
-    const { deltas, negativeDeltas, netGrowthDay } = calculateDeltas(currentTotals, previousTotals);
-
-    if (negativeDeltas.length && !payload.confirmNegativeDeltas) {
-      return res.status(409).json({
-        code: "NEGATIVE_DELTAS",
-        message:
-          "One or more cumulative totals are lower than yesterday. Confirm with confirmNegativeDeltas=true.",
-        negativeDeltas,
-      });
-    }
+    const { deltas, netGrowthDay } = calculateDeltas(currentTotals, previousTotals);
 
     const report = await prisma.$transaction(async (tx) => {
       const created = await tx.report.create({
@@ -218,7 +208,6 @@ router.post("/", async (req, res, next) => {
 
     return res.status(201).json({
       report: serializeReport(latest ?? report),
-      warnings: negativeDeltas.length ? { negativeDeltas } : null,
     });
   } catch (error) {
     if (error instanceof Error && error.message === "App not found") {
@@ -239,7 +228,6 @@ const updateReportSchema = z.object({
   adSpend: z.number().nonnegative().default(0),
   revenueDay: z.number().nonnegative().default(0),
   refundsDay: z.number().nonnegative().default(0),
-  confirmNegativeDeltas: z.boolean().optional().default(false),
 });
 
 router.put("/:id", async (req, res, next) => {
@@ -277,16 +265,7 @@ router.put("/:id", async (req, res, next) => {
     });
 
     const previousTotals = previousReport ? extractTotals(previousReport) : null;
-    const { deltas, negativeDeltas, netGrowthDay } = calculateDeltas(currentTotals, previousTotals);
-
-    if (negativeDeltas.length && !payload.confirmNegativeDeltas) {
-      return res.status(409).json({
-        code: "NEGATIVE_DELTAS",
-        message:
-          "One or more cumulative totals are lower than yesterday. Confirm with confirmNegativeDeltas=true.",
-        negativeDeltas,
-      });
-    }
+    const { deltas, netGrowthDay } = calculateDeltas(currentTotals, previousTotals);
 
     const updated = await prisma.$transaction(async (tx) => {
       const upd = await tx.report.update({
@@ -316,7 +295,6 @@ router.put("/:id", async (req, res, next) => {
 
     return res.status(200).json({
       report: serializeReport(latest ?? updated),
-      warnings: negativeDeltas.length ? { negativeDeltas } : null,
     });
   } catch (error) {
     if (error instanceof Error && error.message === "App not found") {

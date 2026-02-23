@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import type { Report } from "@/lib/types";
+import { formatNumber } from "@/lib/format";
 
 export interface ReportFormPayload {
   appId: string;
@@ -16,7 +17,6 @@ export interface ReportFormPayload {
   adSpend: number;
   revenueDay: number;
   refundsDay: number;
-  confirmNegativeDeltas?: boolean;
 }
 
 interface Props {
@@ -24,6 +24,8 @@ interface Props {
   onClose: () => void;
   onSubmit: (payload: ReportFormPayload) => Promise<void>;
   initialData?: Report;
+  /** Latest saved report — used in CREATE mode to show previous cumulative totals as hints */
+  latestReport?: Report | null;
 }
 
 function numberFrom(formData: FormData, key: string) {
@@ -244,7 +246,18 @@ const FINANCIAL_FIELDS: FieldDef[] = [
 
 type TabKey = "funnel" | "financial";
 
-export default function ReportFormModal({ appId, onClose, onSubmit, initialData }: Props) {
+// Map field name → key on the Report object for prev-day hint lookup
+const FIELD_TO_TOTAL_KEY: Record<string, keyof Report> = {
+  installTotal: "installTotal",
+  paywallShownTotal: "paywallShownTotal",
+  trialStartedTotal: "trialStartedTotal",
+  subscriptionStartedTotal: "subscriptionStartedTotal",
+  subscriptionCancelledTotal: "subscriptionCancelledTotal",
+  paymentFailedTotal: "paymentFailedTotal",
+  subscriptionActiveTotal: "subscriptionActiveTotal",
+};
+
+export default function ReportFormModal({ appId, onClose, onSubmit, initialData, latestReport }: Props) {
   const isEditMode = !!initialData;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -521,27 +534,53 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData 
             captures all values regardless of which tab is currently active */}
         <div className="px-6 py-5">
           <div style={{ display: activeTab === "funnel" ? undefined : "none" }}>
+            {/* In CREATE mode show a banner explaining what "total" means */}
+            {!isEditMode && latestReport && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/[0.05] px-3.5 py-2.5">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                <p className="text-[11px] text-primarySoft/75 leading-relaxed">
+                  Введи <span className="font-semibold text-primarySoft">кумулятивные тоталы</span> из AppStore / AppsFlyer.
+                  Подсказка «Вчера» — последнее сохранённое значение.
+                </p>
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
-              {funnelFields.map((field) => (
-                <label key={field.name} className="block group">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <span style={{ color: field.color }} className="opacity-75">
-                      {field.icon}
-                    </span>
-                    <span className="text-xs font-medium text-text">{field.label}</span>
-                  </div>
-                  <input
-                    name={field.name}
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={defaults[field.name as keyof typeof defaults]}
-                    className="input-field py-2.5"
-                    placeholder="0"
-                  />
-                  <p className="mt-1 text-[11px] text-mutedDark">{field.hint}</p>
-                </label>
-              ))}
+              {funnelFields.map((field) => {
+                const prevValue = !isEditMode && latestReport
+                  ? (latestReport[FIELD_TO_TOTAL_KEY[field.name]] as number | undefined)
+                  : undefined;
+                return (
+                  <label key={field.name} className="block group">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span style={{ color: field.color }} className="opacity-75">
+                          {field.icon}
+                        </span>
+                        <span className="text-xs font-medium text-text">{field.label}</span>
+                      </div>
+                      {prevValue !== undefined && prevValue > 0 && (
+                        <span className="text-[10px] text-mutedDark">
+                          Вчера: <span className="mono text-primarySoft/70">{formatNumber(prevValue)}</span>
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      name={field.name}
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={defaults[field.name as keyof typeof defaults]}
+                      className="input-field py-2.5"
+                      placeholder={prevValue !== undefined && prevValue > 0 ? String(prevValue) : "0"}
+                    />
+                    <p className="mt-1 text-[11px] text-mutedDark">{field.hint}</p>
+                  </label>
+                );
+              })}
             </div>
           </div>
 

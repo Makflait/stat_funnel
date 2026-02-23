@@ -69,31 +69,37 @@ export function calculateDeltas(
   current: CumulativeTotals,
   previous: CumulativeTotals | null
 ): { deltas: DailyDeltas; negativeDeltas: NegativeDelta[]; netGrowthDay: number } {
+  // Flow metrics are monotonically increasing counters (AppStore/AppsFlyer totals).
+  // They can never decrease, so we clamp deltas to 0 if they come out negative
+  // (caused by a data-entry error — user typed a lower cumulative total than yesterday).
+  // subscriptionActiveDay is a point-in-time snapshot and CAN be negative.
+  const clamp = (v: number) => Math.max(0, v);
+
   const deltas: DailyDeltas = {
-    installDay: previous ? current.installTotal - previous.installTotal : current.installTotal,
-    paywallShownDay: previous
+    installDay: clamp(previous ? current.installTotal - previous.installTotal : current.installTotal),
+    paywallShownDay: clamp(previous
       ? current.paywallShownTotal - previous.paywallShownTotal
-      : current.paywallShownTotal,
-    trialStartedDay: previous
+      : current.paywallShownTotal),
+    trialStartedDay: clamp(previous
       ? current.trialStartedTotal - previous.trialStartedTotal
-      : current.trialStartedTotal,
-    subscriptionStartedDay: previous
+      : current.trialStartedTotal),
+    subscriptionStartedDay: clamp(previous
       ? current.subscriptionStartedTotal - previous.subscriptionStartedTotal
-      : current.subscriptionStartedTotal,
-    subscriptionCancelledDay: previous
+      : current.subscriptionStartedTotal),
+    subscriptionCancelledDay: clamp(previous
       ? current.subscriptionCancelledTotal - previous.subscriptionCancelledTotal
-      : current.subscriptionCancelledTotal,
-    paymentFailedDay: previous
+      : current.subscriptionCancelledTotal),
+    paymentFailedDay: clamp(previous
       ? current.paymentFailedTotal - previous.paymentFailedTotal
-      : current.paymentFailedTotal,
+      : current.paymentFailedTotal),
+    // Snapshot metric — can legitimately decrease
     subscriptionActiveDay: previous
       ? current.subscriptionActiveTotal - previous.subscriptionActiveTotal
       : current.subscriptionActiveTotal,
   };
 
-  const negativeDeltas = (Object.entries(deltas) as [keyof DailyDeltas, number][])
-    .filter(([, value]) => value < 0)
-    .map(([field, value]) => ({ field, value }));
+  // negativeDeltas kept for API compat but will always be empty for flow metrics now
+  const negativeDeltas: NegativeDelta[] = [];
 
   const netGrowthDay = deltas.subscriptionStartedDay - deltas.subscriptionCancelledDay;
 

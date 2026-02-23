@@ -16,18 +16,12 @@ import { clearToken, getToken } from "@/lib/auth";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import type { AppItem, DashboardResponse, Kpis, Report } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
-import PredictBlock from "./predict-block";
+import PredictBlock, { PredictLiveData } from "./predict-block";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Period = "7" | "14" | "30" | "custom";
 type ValueType = "percent" | "currency" | "number";
-
-interface NegativeDeltaResponse {
-  code: "NEGATIVE_DELTAS";
-  message: string;
-  negativeDeltas: Array<{ field: string; value: number }>;
-}
 
 interface FunnelBlock {
   key: string;
@@ -113,10 +107,7 @@ function buildFunnelBlocks(funnel: DashboardResponse["funnel"] | undefined): Fun
 }
 
 async function parseErrorResponse(response: Response) {
-  const body = (await response.json().catch(() => null)) as
-    | NegativeDeltaResponse
-    | { message?: string }
-    | null;
+  const body = (await response.json().catch(() => null)) as { message?: string } | null;
   return body;
 }
 
@@ -481,6 +472,25 @@ export default function DashboardClient() {
 
   const funnelBlocks = useMemo(() => buildFunnelBlocks(dashboard?.funnel), [dashboard?.funnel]);
 
+  // Stable key that only changes when funnel values actually change (not on every dashboard reload)
+  const funnelDataKey = useMemo(
+    () => dashboard?.funnel?.map((s) => s.value).join(",") ?? "",
+    [dashboard?.funnel]
+  );
+
+  // Compute live data for the prediction block from real report KPIs + trend
+  const predictLiveData = useMemo<PredictLiveData | null>(() => {
+    if (!dashboard?.kpis) return null;
+    const trend = dashboard.trend ?? [];
+    const installSum = trend.reduce((sum, d) => sum + (d.installs ?? 0), 0);
+    const avgDailyInstalls = trend.length > 0 ? installSum / trend.length : 0;
+    return {
+      crPaywallToTrial: dashboard.kpis.crPaywallToTrial ?? null,
+      crTrialToSub: dashboard.kpis.crTrialToSubscription ?? null,
+      avgDailyInstalls,
+    };
+  }, [dashboard?.kpis, dashboard?.trend]);
+
   useEffect(() => {
     const token = getToken();
     if (!token) {
@@ -503,7 +513,9 @@ export default function DashboardClient() {
       const t = setTimeout(() => setFunnelVisible(true), 80);
       return () => clearTimeout(t);
     }
-  }, [funnelBlocks.length, dashboard]);
+  // Re-animate only when the funnel values themselves change, not on every dashboard reload
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [funnelDataKey]);
 
   async function loadApps() {
     try {
@@ -561,7 +573,7 @@ export default function DashboardClient() {
     }
   }
 
-  async function createReport(payload: ReportFormPayload, forceConfirm = false): Promise<void> {
+  async function createReport(payload: ReportFormPayload): Promise<void> {
     const token = getToken();
     const response = await fetch(buildApiUrl("/reports"), {
       method: "POST",
@@ -569,31 +581,19 @@ export default function DashboardClient() {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ ...payload, confirmNegativeDeltas: forceConfirm }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       const body = await parseErrorResponse(response);
-      if (body && "code" in body && body.code === "NEGATIVE_DELTAS" && !forceConfirm) {
-        const details = body.negativeDeltas.map((d) => `${d.field}: ${d.value}`).join("\n");
-        const accepted = window.confirm(
-          `${body.message}\n\n${details}\n\nСохранить отчёт несмотря на это?`
-        );
-        if (accepted) return createReport(payload, true);
-        throw new Error("Отчёт не сохранён");
-      }
-      const message = body && "message" in body ? body.message : null;
+      const message = body?.message ?? null;
       throw new Error(message || `Ошибка создания отчёта: ${response.status}`);
     }
 
     await loadDashboard(payload.appId, range.from, range.to);
   }
 
-  async function updateReport(
-    reportId: string,
-    payload: ReportFormPayload,
-    forceConfirm = false
-  ): Promise<void> {
+  async function updateReport(reportId: string, payload: ReportFormPayload): Promise<void> {
     const token = getToken();
     const response = await fetch(buildApiUrl(`/reports/${reportId}`), {
       method: "PUT",
@@ -601,20 +601,12 @@ export default function DashboardClient() {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ ...payload, confirmNegativeDeltas: forceConfirm }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       const body = await parseErrorResponse(response);
-      if (body && "code" in body && body.code === "NEGATIVE_DELTAS" && !forceConfirm) {
-        const details = body.negativeDeltas.map((d) => `${d.field}: ${d.value}`).join("\n");
-        const accepted = window.confirm(
-          `${body.message}\n\n${details}\n\nСохранить изменения несмотря на это?`
-        );
-        if (accepted) return updateReport(reportId, payload, true);
-        throw new Error("Изменения не сохранены");
-      }
-      const message = body && "message" in body ? body.message : null;
+      const message = body?.message ?? null;
       throw new Error(message || `Ошибка обновления отчёта: ${response.status}`);
     }
 
@@ -1069,7 +1061,7 @@ export default function DashboardClient() {
         {/* ╔══════════════════════════╗
             ║         PREDICT          ║
             ╚══════════════════════════╝ */}
-        <PredictBlock />
+        <PredictBlock liveData={predictLiveData} />
 
         {/* ╔══════════════════════════╗
             ║          TABLE           ║
@@ -1267,6 +1259,7 @@ export default function DashboardClient() {
       {showReportForm && selectedAppId ? (
         <ReportFormModal
           appId={selectedAppId}
+          latestReport={dashboard?.latest}
           onClose={() => setShowReportForm(false)}
           onSubmit={(payload) => createReport(payload)}
         />
