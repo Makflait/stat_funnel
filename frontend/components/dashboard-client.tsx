@@ -16,6 +16,7 @@ import { clearToken, getToken } from "@/lib/auth";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import type { AppItem, DashboardResponse, Kpis, Report } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
+import PredictBlock from "./predict-block";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1064,6 +1065,11 @@ export default function DashboardClient() {
             )}
           </div>
         </section>
+
+        {/* ╔══════════════════════════╗
+            ║         PREDICT          ║
+            ╚══════════════════════════╝ */}
+        <PredictBlock />
 
         {/* ╔══════════════════════════╗
             ║          TABLE           ║

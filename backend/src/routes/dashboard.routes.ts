@@ -71,6 +71,7 @@ router.get("/", async (req, res, next) => {
         kpis: null,
         trend: [],
         table: [],
+        latest: null,
       });
     }
 

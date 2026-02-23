@@ -130,6 +130,7 @@ export function buildKpis(report: Pick<
   | "revenueDay"
   | "adSpend"
   | "installDay"
+  | "subscriptionStartedDay"
 >) {
   const revenue = Number(report.revenueDay);
   const adSpend = Number(report.adSpend);
@@ -140,8 +141,10 @@ export function buildKpis(report: Pick<
     crTrialToSubscription: pct(report.subscriptionStartedTotal, report.trialStartedTotal),
     netSubscriptionGrowth: report.netGrowthDay,
     activeSubscriptions: report.subscriptionActiveTotal,
-    arpu: report.installDay > 0 ? revenue / report.installDay : null,
-    cac: report.installDay > 0 && adSpend > 0 ? adSpend / report.installDay : null,
+    // ARPU = daily revenue ÷ active subscribers (not daily installs)
+    arpu: report.subscriptionActiveTotal > 0 ? revenue / report.subscriptionActiveTotal : null,
+    // CAC = ad spend ÷ new paying customers that day (installs → CPI, not CAC)
+    cac: report.subscriptionStartedDay > 0 && adSpend > 0 ? adSpend / report.subscriptionStartedDay : null,
   };
 }
 
