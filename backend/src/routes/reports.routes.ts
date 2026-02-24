@@ -18,6 +18,7 @@ const reportSchema = z.object({
   date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/),
+  geo: z.string().min(1).max(20).default("ALL"),
   installTotal: z.number().int().nonnegative(),
   paywallShownTotal: z.number().int().nonnegative(),
   trialStartedTotal: z.number().int().nonnegative(),
@@ -67,13 +68,19 @@ async function assertAppOwnership(appId: string, userId: string) {
   }
 }
 
-async function recalculateFromDate(tx: Prisma.TransactionClient, appId: string, startDate: Date) {
+/** Recalculate deltas for a specific app+geo combination from startDate onwards.
+ *  Must be called inside a transaction. */
+async function recalculateFromDate(
+  tx: Prisma.TransactionClient,
+  appId: string,
+  geo: string,
+  startDate: Date
+) {
   const reports = await tx.report.findMany({
     where: {
       appId,
-      date: {
-        gte: startDate,
-      },
+      geo,
+      date: { gte: startDate },
     },
     orderBy: { date: "asc" },
   });
@@ -85,6 +92,7 @@ async function recalculateFromDate(tx: Prisma.TransactionClient, appId: string, 
   const previous = await tx.report.findFirst({
     where: {
       appId,
+      geo,
       date: { lt: reports[0].date },
     },
     orderBy: { date: "desc" },
@@ -98,10 +106,7 @@ async function recalculateFromDate(tx: Prisma.TransactionClient, appId: string, 
 
     await tx.report.update({
       where: { id: report.id },
-      data: {
-        ...deltas,
-        netGrowthDay,
-      },
+      data: { ...deltas, netGrowthDay },
     });
 
     previousTotals = currentTotals;
@@ -118,12 +123,9 @@ router.get("/", async (req, res, next) => {
     const reports = await prisma.report.findMany({
       where: {
         appId: query.appId,
-        date: {
-          gte: fromDate,
-          lte: toDate,
-        },
+        date: { gte: fromDate, lte: toDate },
       },
-      orderBy: { date: "asc" },
+      orderBy: [{ date: "asc" }, { geo: "asc" }],
     });
 
     return res.status(200).json({
@@ -143,24 +145,27 @@ router.post("/", async (req, res, next) => {
     await assertAppOwnership(payload.appId, req.user!.id);
 
     const reportDate = toDateOnlyUtc(payload.date);
+    const geo = payload.geo.toUpperCase();
 
     const existing = await prisma.report.findUnique({
       where: {
-        appId_date: {
+        appId_date_geo: {
           appId: payload.appId,
           date: reportDate,
+          geo,
         },
       },
       select: { id: true },
     });
 
     if (existing) {
-      return res.status(409).json({ message: "Report for this date already exists" });
+      return res.status(409).json({ message: `Report for this date and GEO (${geo}) already exists` });
     }
 
     const previousReport = await prisma.report.findFirst({
       where: {
         appId: payload.appId,
+        geo,
         date: { lt: reportDate },
       },
       orderBy: { date: "desc" },
@@ -184,6 +189,7 @@ router.post("/", async (req, res, next) => {
         data: {
           appId: payload.appId,
           date: reportDate,
+          geo,
           installTotal: payload.installTotal,
           paywallShownTotal: payload.paywallShownTotal,
           trialStartedTotal: payload.trialStartedTotal,
@@ -199,7 +205,7 @@ router.post("/", async (req, res, next) => {
         },
       });
 
-      await recalculateFromDate(tx, payload.appId, reportDate);
+      await recalculateFromDate(tx, payload.appId, geo, reportDate);
 
       return created;
     });
@@ -237,7 +243,7 @@ router.put("/:id", async (req, res, next) => {
 
     const existing = await prisma.report.findUnique({
       where: { id },
-      select: { id: true, appId: true, date: true },
+      select: { id: true, appId: true, date: true, geo: true },
     });
 
     if (!existing) {
@@ -259,6 +265,7 @@ router.put("/:id", async (req, res, next) => {
     const previousReport = await prisma.report.findFirst({
       where: {
         appId: existing.appId,
+        geo: existing.geo,
         date: { lt: existing.date },
       },
       orderBy: { date: "desc" },
@@ -286,7 +293,7 @@ router.put("/:id", async (req, res, next) => {
         },
       });
 
-      await recalculateFromDate(tx, existing.appId, existing.date);
+      await recalculateFromDate(tx, existing.appId, existing.geo, existing.date);
 
       return upd;
     });
@@ -296,6 +303,36 @@ router.put("/:id", async (req, res, next) => {
     return res.status(200).json({
       report: serializeReport(latest ?? updated),
     });
+  } catch (error) {
+    if (error instanceof Error && error.message === "App not found") {
+      return res.status(404).json({ message: error.message });
+    }
+    return next(error);
+  }
+});
+
+router.delete("/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.report.findUnique({
+      where: { id },
+      select: { id: true, appId: true, date: true, geo: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
+    await assertAppOwnership(existing.appId, req.user!.id);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.report.delete({ where: { id } });
+      // Recalculate subsequent reports in the same GEO chain
+      await recalculateFromDate(tx, existing.appId, existing.geo, existing.date);
+    });
+
+    return res.status(204).send();
   } catch (error) {
     if (error instanceof Error && error.message === "App not found") {
       return res.status(404).json({ message: error.message });
@@ -314,16 +351,14 @@ router.get("/export", async (req, res, next) => {
     const reports = await prisma.report.findMany({
       where: {
         appId: query.appId,
-        date: {
-          gte: fromDate,
-          lte: toDate,
-        },
+        date: { gte: fromDate, lte: toDate },
       },
-      orderBy: { date: "asc" },
+      orderBy: [{ date: "asc" }, { geo: "asc" }],
     });
 
     const csvHeader = [
       "date",
+      "geo",
       "installs_daily",
       "subscriptions_daily",
       "cancellations_daily",
@@ -335,6 +370,7 @@ router.get("/export", async (req, res, next) => {
     const csvRows = reports.map((report) => {
       return [
         formatDateOnlyUtc(report.date),
+        report.geo,
         report.installDay,
         report.subscriptionStartedDay,
         report.subscriptionCancelledDay,

@@ -7,6 +7,7 @@ import { formatNumber } from "@/lib/format";
 export interface ReportFormPayload {
   appId: string;
   date: string;
+  geo: string;
   installTotal: number;
   paywallShownTotal: number;
   trialStartedTotal: number;
@@ -26,6 +27,8 @@ interface Props {
   initialData?: Report;
   /** Latest saved report — used in CREATE mode to show previous cumulative totals as hints */
   latestReport?: Report | null;
+  /** Existing GEO codes for this app — shown as quick-select pills in CREATE mode */
+  knownGeos?: string[];
 }
 
 function numberFrom(formData: FormData, key: string) {
@@ -257,11 +260,12 @@ const FIELD_TO_TOTAL_KEY: Record<string, keyof Report> = {
   subscriptionActiveTotal: "subscriptionActiveTotal",
 };
 
-export default function ReportFormModal({ appId, onClose, onSubmit, initialData, latestReport }: Props) {
+export default function ReportFormModal({ appId, onClose, onSubmit, initialData, latestReport, knownGeos }: Props) {
   const isEditMode = !!initialData;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("funnel");
+  const [geoInput, setGeoInput] = useState<string>(initialData?.geo ?? "ALL");
 
   const funnelFields = isEditMode ? FUNNEL_FIELDS_EDIT : FUNNEL_FIELDS_CREATE;
 
@@ -327,11 +331,14 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData,
 
     let payload: ReportFormPayload;
 
+    const geo = geoInput.trim().toUpperCase() || "ALL";
+
     if (isEditMode && initialData) {
       // Edit mode: form has DAY values → convert back to cumulative totals
       payload = {
         appId,
         date: dateValue,
+        geo,
         installTotal: dayToTotal(
           initialData.installTotal,
           initialData.installDay,
@@ -373,6 +380,7 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData,
       payload = {
         appId,
         date: dateValue,
+        geo,
         installTotal: numberFrom(formData, "installTotal"),
         paywallShownTotal: numberFrom(formData, "paywallShownTotal"),
         trialStartedTotal: numberFrom(formData, "trialStartedTotal"),
@@ -480,6 +488,47 @@ export default function ReportFormModal({ appId, onClose, onSubmit, initialData,
                 className="input-field max-w-[200px] ml-auto py-2.5"
               />
             )}
+          </div>
+        </div>
+
+        {/* GEO field */}
+        <div className="border-b border-border/55 px-6 py-4">
+          <div className="flex items-start gap-4 flex-wrap">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-text">GEO</p>
+              <p className="text-xs text-muted mt-0.5">
+                {isEditMode ? "GEO этого отчёта" : "Страна / регион (US, UK, MX...)"}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 ml-auto">
+              <input
+                type="text"
+                value={geoInput}
+                onChange={(e) => setGeoInput(e.target.value.toUpperCase())}
+                disabled={isEditMode}
+                maxLength={20}
+                placeholder="US"
+                className="input-field max-w-[160px] py-2 mono uppercase disabled:opacity-60 disabled:cursor-not-allowed"
+              />
+              {!isEditMode && knownGeos && knownGeos.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {knownGeos.map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setGeoInput(g)}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium mono transition-colors ${
+                        geoInput === g
+                          ? "border-primary/60 bg-primary/15 text-primarySoft"
+                          : "border-border/60 text-mutedDark hover:border-borderLight hover:text-text"
+                      }`}
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

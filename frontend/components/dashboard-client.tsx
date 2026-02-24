@@ -14,7 +14,7 @@ import {
 import { apiRequest, buildApiUrl } from "@/lib/api";
 import { clearToken, getToken } from "@/lib/auth";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
-import type { AppItem, DashboardResponse, Kpis, Report } from "@/lib/types";
+import type { AppItem, DashboardResponse, GeoBreakdown, Kpis, Report } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
 import PredictBlock, { PredictLiveData } from "./predict-block";
 
@@ -244,6 +244,16 @@ const IconEdit = () => (
   </svg>
 );
 
+const IconTrash = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function KpiCard({ label, rawValue, formatted, valueType, icon, iconBg, iconColor, description, delay }: KpiCardData) {
@@ -456,6 +466,7 @@ export default function DashboardClient() {
   const [period, setPeriod] = useState<Period>("30");
   const [customFrom, setCustomFrom] = useState(shiftDays(todayIso(), -29));
   const [customTo, setCustomTo] = useState(todayIso());
+  const [geoFilter, setGeoFilter] = useState<string>("");
   const [showReportForm, setShowReportForm] = useState(false);
   const [editingReport, setEditingReport] = useState<Report | null>(null);
   const [showAppForm, setShowAppForm] = useState(false);
@@ -478,18 +489,17 @@ export default function DashboardClient() {
     [dashboard?.funnel]
   );
 
-  // Compute live data for the prediction block from real report KPIs + trend
-  const predictLiveData = useMemo<PredictLiveData | null>(() => {
-    if (!dashboard?.kpis) return null;
-    const trend = dashboard.trend ?? [];
-    const installSum = trend.reduce((sum, d) => sum + (d.installs ?? 0), 0);
-    const avgDailyInstalls = trend.length > 0 ? installSum / trend.length : 0;
-    return {
-      crPaywallToTrial: dashboard.kpis.crPaywallToTrial ?? null,
-      crTrialToSub: dashboard.kpis.crTrialToSubscription ?? null,
-      avgDailyInstalls,
-    };
-  }, [dashboard?.kpis, dashboard?.trend]);
+  // Compute per-GEO live data array for the predict block
+  const predictLiveDataByGeo = useMemo<Array<PredictLiveData & { geo: string }> | null>(() => {
+    const breakdown: GeoBreakdown[] = dashboard?.geoBreakdown ?? [];
+    if (!breakdown.length) return null;
+    return breakdown.map((g) => ({
+      geo: g.geo,
+      crPaywallToTrial: g.kpis?.crPaywallToTrial ?? null,
+      crTrialToSub: g.kpis?.crTrialToSubscription ?? null,
+      avgDailyInstalls: g.avgDailyInstalls,
+    }));
+  }, [dashboard?.geoBreakdown]);
 
   useEffect(() => {
     const token = getToken();
@@ -503,9 +513,9 @@ export default function DashboardClient() {
 
   useEffect(() => {
     if (!selectedAppId) return;
-    loadDashboard(selectedAppId, range.from, range.to);
+    loadDashboard(selectedAppId, range.from, range.to, geoFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAppId, range.from, range.to]);
+  }, [selectedAppId, range.from, range.to, geoFilter]);
 
   useEffect(() => {
     setFunnelVisible(false);
@@ -529,11 +539,13 @@ export default function DashboardClient() {
     }
   }
 
-  async function loadDashboard(appId: string, from: string, to: string) {
+  async function loadDashboard(appId: string, from: string, to: string, geo = "") {
     setError(null);
     setDashboardLoading(true);
     try {
-      const query = new URLSearchParams({ appId, from, to });
+      const params: Record<string, string> = { appId, from, to };
+      if (geo) params.geo = geo;
+      const query = new URLSearchParams(params);
       const data = await apiRequest<DashboardResponse>(`/dashboard?${query.toString()}`);
       setDashboard(data);
     } catch (err) {
@@ -590,7 +602,7 @@ export default function DashboardClient() {
       throw new Error(message || `Ошибка создания отчёта: ${response.status}`);
     }
 
-    await loadDashboard(payload.appId, range.from, range.to);
+    await loadDashboard(payload.appId, range.from, range.to, geoFilter);
   }
 
   async function updateReport(reportId: string, payload: ReportFormPayload): Promise<void> {
@@ -610,7 +622,24 @@ export default function DashboardClient() {
       throw new Error(message || `Ошибка обновления отчёта: ${response.status}`);
     }
 
-    await loadDashboard(payload.appId, range.from, range.to);
+    await loadDashboard(payload.appId, range.from, range.to, geoFilter);
+  }
+
+  async function deleteReport(report: Report): Promise<void> {
+    const confirmed = window.confirm(
+      `Удалить отчёт за ${report.date} [${report.geo}]? Это действие нельзя отменить.`
+    );
+    if (!confirmed) return;
+    const token = getToken();
+    const response = await fetch(buildApiUrl(`/reports/${report.id}`), {
+      method: "DELETE",
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!response.ok) {
+      const body = await parseErrorResponse(response);
+      throw new Error(body?.message || `Ошибка удаления: ${response.status}`);
+    }
+    await loadDashboard(report.appId, range.from, range.to, geoFilter);
   }
 
   async function exportCsv() {
@@ -868,6 +897,36 @@ export default function DashboardClient() {
             </div>
           </div>
 
+          {/* GEO filter pills */}
+          {dashboard?.geos && dashboard.geos.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-mutedDark">GEO:</span>
+              <button
+                onClick={() => setGeoFilter("")}
+                className={`rounded-xl px-3 py-1.5 text-xs font-medium mono transition-all duration-200 ${
+                  geoFilter === ""
+                    ? "bg-primary text-white shadow-glowSm"
+                    : "btn-ghost text-muted hover:text-text"
+                }`}
+              >
+                All
+              </button>
+              {dashboard.geos.map((geo) => (
+                <button
+                  key={geo}
+                  onClick={() => setGeoFilter(geo)}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium mono transition-all duration-200 ${
+                    geoFilter === geo
+                      ? "bg-primary text-white shadow-glowSm"
+                      : "btn-ghost text-muted hover:text-text"
+                  }`}
+                >
+                  {geo}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* New app form */}
           {showAppForm && (
             <form
@@ -1061,7 +1120,7 @@ export default function DashboardClient() {
         {/* ╔══════════════════════════╗
             ║         PREDICT          ║
             ╚══════════════════════════╝ */}
-        <PredictBlock liveData={predictLiveData} />
+        <PredictBlock liveDataByGeo={predictLiveDataByGeo} />
 
         {/* ╔══════════════════════════╗
             ║          TABLE           ║
@@ -1101,6 +1160,9 @@ export default function DashboardClient() {
                       Дата
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
+                      GEO
+                    </th>
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Инсталлы
                     </th>
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
@@ -1124,7 +1186,7 @@ export default function DashboardClient() {
                     <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark">
                       Net Growth
                     </th>
-                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark w-10" />
+                    <th className="px-4 py-3.5 text-[11px] font-medium uppercase tracking-widest text-mutedDark w-20" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1150,6 +1212,12 @@ export default function DashboardClient() {
                               CR {crInstall2Sub}%
                             </p>
                           )}
+                        </td>
+                        {/* GEO */}
+                        <td className="px-4 py-3">
+                          <span className="mono rounded-md border border-border/50 bg-panel/60 px-2 py-0.5 text-[10px] font-medium text-mutedDark">
+                            {row.geo}
+                          </span>
                         </td>
                         {/* Installs */}
                         <td className="px-4 py-3 font-medium text-text">
@@ -1215,22 +1283,31 @@ export default function DashboardClient() {
                           {row.netGrowthDay >= 0 ? "+" : ""}
                           {formatNumber(row.netGrowthDay)}
                         </td>
-                        {/* Edit */}
+                        {/* Edit + Delete */}
                         <td className="px-4 py-3">
-                          <button
-                            onClick={() => setEditingReport(row)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark opacity-0 transition-all duration-150 hover:border-primary/40 hover:bg-primary/10 hover:text-primarySoft group-hover:opacity-100"
-                            title="Редактировать"
-                          >
-                            <IconEdit />
-                          </button>
+                          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-150">
+                            <button
+                              onClick={() => setEditingReport(row)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primarySoft"
+                              title="Редактировать"
+                            >
+                              <IconEdit />
+                            </button>
+                            <button
+                              onClick={() => deleteReport(row).catch(handleApiError)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/50 text-mutedDark transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-dangerSoft"
+                              title="Удалить"
+                            >
+                              <IconTrash />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
                   })}
                   {(dashboard?.table ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={10} className="px-5 py-14 text-center">
+                      <td colSpan={11} className="px-5 py-14 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <div className="h-12 w-12 rounded-2xl border border-border bg-panel/50 flex items-center justify-center">
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-mutedDark">
@@ -1260,6 +1337,7 @@ export default function DashboardClient() {
         <ReportFormModal
           appId={selectedAppId}
           latestReport={dashboard?.latest}
+          knownGeos={dashboard?.geos}
           onClose={() => setShowReportForm(false)}
           onSubmit={(payload) => createReport(payload)}
         />

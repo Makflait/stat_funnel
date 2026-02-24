@@ -38,6 +38,7 @@ model Report {
   appId String
   app  App      @relation(fields: [appId], references: [id], onDelete: Cascade)
   date DateTime
+  geo  String   @default("ALL")
 
   installTotal                Int
   paywallShownTotal           Int
@@ -64,6 +65,6 @@ model Report {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([appId, date])
-  @@index([appId, date(sort: Desc)])
+  @@unique([appId, date, geo])
+  @@index([appId, geo, date(sort: Desc)])
 }

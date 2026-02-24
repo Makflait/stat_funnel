@@ -6,6 +6,7 @@ export function serializeReport(report: Report) {
     id: report.id,
     appId: report.appId,
     date: formatDateOnlyUtc(report.date),
+    geo: report.geo,
     installTotal: report.installTotal,
     paywallShownTotal: report.paywallShownTotal,
     trialStartedTotal: report.trialStartedTotal,

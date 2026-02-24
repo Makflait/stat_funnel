@@ -10,6 +10,7 @@ export interface Report {
   id: string;
   appId: string;
   date: string;
+  geo: string;
   installTotal: number;
   paywallShownTotal: number;
   trialStartedTotal: number;
@@ -48,8 +49,16 @@ export interface Kpis {
   cac: number | null;
 }
 
+export interface GeoBreakdown {
+  geo: string;
+  kpis: Kpis | null;
+  avgDailyInstalls: number;
+}
+
 export interface DashboardResponse {
   app: AppItem;
+  geos: string[];
+  geoBreakdown: GeoBreakdown[];
   funnel: FunnelStage[];
   kpis: Kpis | null;
   trend: Array<{ date: string; installs: number; subscriptions: number }>;

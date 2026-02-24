@@ -343,20 +343,42 @@ function ResultChart({ rows, compareRows }: { rows: MonthRow[]; compareRows?: Mo
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+type GeoLiveData = PredictLiveData & { geo: string };
+
 interface PredictBlockProps {
-  liveData?: PredictLiveData | null;
+  liveDataByGeo?: GeoLiveData[] | null;
 }
 
-export default function PredictBlock({ liveData }: PredictBlockProps) {
-  const [inputs, setInputs] = useState<PredictInputs>(() => {
-    const base = { ...DEFAULT_INPUTS };
-    if (liveData) {
-      if (liveData.avgDailyInstalls > 0) base.installsPerMonth = Math.round(liveData.avgDailyInstalls * 30);
-      if (liveData.crPaywallToTrial != null) base.paywallCR = Math.round(liveData.crPaywallToTrial * 10) / 10;
-      if (liveData.crTrialToSub != null) base.trialToSubCR = Math.round(liveData.crTrialToSub * 10) / 10;
-    }
-    return base;
-  });
+/** Compute aggregate liveData from all GEOs (weighted by installs) */
+function aggregateLiveData(byGeo: GeoLiveData[]): PredictLiveData {
+  const totalInstalls = byGeo.reduce((s, g) => s + g.avgDailyInstalls, 0);
+  if (totalInstalls === 0) {
+    return { avgDailyInstalls: 0, crPaywallToTrial: null, crTrialToSub: null };
+  }
+  let crPaywall = 0, crTrial = 0, hasPaywall = false, hasTrial = false;
+  for (const g of byGeo) {
+    const w = g.avgDailyInstalls / totalInstalls;
+    if (g.crPaywallToTrial != null) { crPaywall += g.crPaywallToTrial * w; hasPaywall = true; }
+    if (g.crTrialToSub != null) { crTrial += g.crTrialToSub * w; hasTrial = true; }
+  }
+  return {
+    avgDailyInstalls: totalInstalls,
+    crPaywallToTrial: hasPaywall ? crPaywall : null,
+    crTrialToSub: hasTrial ? crTrial : null,
+  };
+}
+
+export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
+  const [selectedGeo, setSelectedGeo] = useState<string>("ALL");
+
+  // The effective liveData for the currently selected GEO (or aggregate)
+  const liveData = useMemo<PredictLiveData | null>(() => {
+    if (!liveDataByGeo?.length) return null;
+    if (selectedGeo === "ALL") return aggregateLiveData(liveDataByGeo);
+    return liveDataByGeo.find((g) => g.geo === selectedGeo) ?? null;
+  }, [liveDataByGeo, selectedGeo]);
+
+  const [inputs, setInputs] = useState<PredictInputs>(DEFAULT_INPUTS);
 
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [periodMode, setPeriodMode] = useState<PeriodMode>("12");
@@ -364,12 +386,14 @@ export default function PredictBlock({ liveData }: PredictBlockProps) {
   const [scenarioName, setScenarioName] = useState("");
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [compareId, setCompareId] = useState<string | null>(null);
-  // track if user has manually overridden live values
-  const [liveApplied, setLiveApplied] = useState(false);
+  // track if user has manually overridden live values per geo
+  const [liveAppliedKey, setLiveAppliedKey] = useState<string | null>(null);
 
-  // Pre-fill from real data once it arrives
+  // Pre-fill from real data when GEO changes or data first arrives
   useEffect(() => {
-    if (!liveData || liveApplied) return;
+    if (!liveData) return;
+    const key = `${selectedGeo}:${liveData.avgDailyInstalls}:${liveData.crPaywallToTrial}:${liveData.crTrialToSub}`;
+    if (liveAppliedKey === key) return;
     setInputs((prev) => {
       const next = { ...prev };
       if (liveData.avgDailyInstalls > 0) next.installsPerMonth = Math.round(liveData.avgDailyInstalls * 30);
@@ -377,8 +401,8 @@ export default function PredictBlock({ liveData }: PredictBlockProps) {
       if (liveData.crTrialToSub != null) next.trialToSubCR = Math.round(liveData.crTrialToSub * 10) / 10;
       return next;
     });
-    setLiveApplied(true);
-  }, [liveData, liveApplied]);
+    setLiveAppliedKey(key);
+  }, [liveData, liveAppliedKey, selectedGeo]);
 
   useEffect(() => {
     try {
@@ -419,13 +443,14 @@ export default function PredictBlock({ liveData }: PredictBlockProps) {
   }
 
   const hasLiveData = liveData != null;
+  const hasMultipleGeos = (liveDataByGeo?.length ?? 0) > 1;
 
   return (
     <section className="card p-5 sm:p-6 section-enter" style={{ animationDelay: "480ms" }}>
       {/* ── Header ── */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/15">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2">
                 <polyline points="22 7 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 7 22 7 22 12" />
@@ -435,10 +460,39 @@ export default function PredictBlock({ liveData }: PredictBlockProps) {
             {hasLiveData ? (
               <span className="badge badge-success flex items-center gap-1">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-                Из отчётов
+                Из отчётов {selectedGeo !== "ALL" ? `· ${selectedGeo}` : "· All"}
               </span>
             ) : (
               <span className="badge badge-warning">Ручной ввод</span>
+            )}
+
+            {/* GEO selector */}
+            {hasMultipleGeos && liveDataByGeo && (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setSelectedGeo("ALL")}
+                  className={`rounded-lg border px-2.5 py-0.5 text-[10px] font-medium mono transition-colors ${
+                    selectedGeo === "ALL"
+                      ? "border-primary/60 bg-primary/15 text-primarySoft"
+                      : "border-border/50 text-mutedDark hover:border-borderLight hover:text-text"
+                  }`}
+                >
+                  All
+                </button>
+                {liveDataByGeo.map((g) => (
+                  <button
+                    key={g.geo}
+                    onClick={() => setSelectedGeo(g.geo)}
+                    className={`rounded-lg border px-2.5 py-0.5 text-[10px] font-medium mono transition-colors ${
+                      selectedGeo === g.geo
+                        ? "border-primary/60 bg-primary/15 text-primarySoft"
+                        : "border-border/50 text-mutedDark hover:border-borderLight hover:text-text"
+                    }`}
+                  >
+                    {g.geo}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
           <p className="mt-1 text-sm text-muted">
