@@ -471,6 +471,7 @@ export default function DashboardClient() {
   const [editingReport, setEditingReport] = useState<Report | null>(null);
   const [showAppForm, setShowAppForm] = useState(false);
   const [newAppName, setNewAppName] = useState("");
+  const [selectedCountry, setSelectedCountry] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -513,9 +514,9 @@ export default function DashboardClient() {
 
   useEffect(() => {
     if (!selectedAppId) return;
-    loadDashboard(selectedAppId, range.from, range.to, geoFilter);
+    loadDashboard(selectedAppId, range.from, range.to, geoFilter, selectedCountry);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAppId, range.from, range.to, geoFilter]);
+  }, [selectedAppId, range.from, range.to, geoFilter, selectedCountry]);
 
   useEffect(() => {
     setFunnelVisible(false);
@@ -539,13 +540,13 @@ export default function DashboardClient() {
     }
   }
 
-  async function loadDashboard(appId: string, from: string, to: string, geo = "") {
+  async function loadDashboard(appId: string, from: string, to: string, geo = "", country?: string) {
     setError(null);
     setDashboardLoading(true);
     try {
-      const params: Record<string, string> = { appId, from, to };
-      if (geo) params.geo = geo;
-      const query = new URLSearchParams(params);
+      const query = new URLSearchParams({ appId, from, to });
+      if (geo) query.set("geo", geo);
+      if (country) query.set("country", country);
       const data = await apiRequest<DashboardResponse>(`/dashboard?${query.toString()}`);
       setDashboard(data);
     } catch (err) {
@@ -666,9 +667,11 @@ export default function DashboardClient() {
     const kpis: Kpis | null = dashboard?.kpis ?? null;
     if (!kpis) return null;
 
+    const isGeo = !!dashboard?.activeCountry;
     const netIsPositive = kpis.netSubscriptionGrowth >= 0;
 
-    return [
+    // geoRelevant marks cards that have meaningful data in geo mode
+    const all: Array<KpiCardData & { geoRelevant: boolean }> = [
       {
         label: "CR Install → Paywall",
         rawValue: kpis.crInstallToPaywall ?? 0,
@@ -679,6 +682,7 @@ export default function DashboardClient() {
         iconColor: "#a78bfa",
         description: "Конверсия: установка → пейвол",
         delay: 0,
+        geoRelevant: false,
       },
       {
         label: "CR Paywall → Trial",
@@ -689,7 +693,8 @@ export default function DashboardClient() {
         iconBg: "rgba(6, 182, 212, 0.14)",
         iconColor: "#22d3ee",
         description: "Конверсия: пейвол → триал",
-        delay: 60,
+        delay: 80,
+        geoRelevant: false,
       },
       {
         label: "CR Trial → Subscription",
@@ -700,7 +705,8 @@ export default function DashboardClient() {
         iconBg: "rgba(16, 185, 129, 0.14)",
         iconColor: "#34d399",
         description: "Конверсия: триал → подписка",
-        delay: 120,
+        delay: isGeo ? 0 : 160,
+        geoRelevant: true,
       },
       {
         label: "Net Subscription Growth",
@@ -711,7 +717,8 @@ export default function DashboardClient() {
         iconBg: netIsPositive ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.13)",
         iconColor: netIsPositive ? "#34d399" : "#f87171",
         description: "Новые − отменённые подписки",
-        delay: 180,
+        delay: isGeo ? 80 : 240,
+        geoRelevant: true,
       },
       {
         label: "Активные подписки",
@@ -722,7 +729,20 @@ export default function DashboardClient() {
         iconBg: "rgba(99, 102, 241, 0.14)",
         iconColor: "#818cf8",
         description: "Всего активных подписок",
-        delay: 240,
+        delay: isGeo ? 160 : 320,
+        geoRelevant: true,
+      },
+      {
+        label: "Revenue",
+        rawValue: kpis.revenueDay,
+        formatted: formatCurrency(kpis.revenueDay),
+        valueType: "currency",
+        icon: <IconDollar />,
+        iconBg: "rgba(16, 185, 129, 0.14)",
+        iconColor: "#34d399",
+        description: "Выручка за период",
+        delay: isGeo ? 240 : 400,
+        geoRelevant: true,
       },
       {
         label: "ARPU",
@@ -733,7 +753,8 @@ export default function DashboardClient() {
         iconBg: "rgba(245, 158, 11, 0.14)",
         iconColor: "#fbbf24",
         description: "Средний доход на пользователя",
-        delay: 300,
+        delay: 480,
+        geoRelevant: false,
       },
       {
         label: "CAC",
@@ -744,10 +765,13 @@ export default function DashboardClient() {
         iconBg: "rgba(239, 68, 68, 0.12)",
         iconColor: "#f87171",
         description: "Стоимость привлечения (CAC)",
-        delay: 360,
+        delay: 560,
+        geoRelevant: false,
       },
     ];
-  }, [dashboard?.kpis]);
+
+    return isGeo ? all.filter((c) => c.geoRelevant) : all;
+  }, [dashboard?.kpis, dashboard?.activeCountry]);
 
   // ─── Loading screen ────────────────────────────────────────────────────────
 
@@ -823,6 +847,13 @@ export default function DashboardClient() {
                 <IconExport />
                 Экспорт CSV
               </button>
+              <a href="/settings" className="btn btn-ghost">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+                Интеграции
+              </a>
               <button
                 onClick={() => {
                   clearToken();
@@ -895,6 +926,36 @@ export default function DashboardClient() {
                 </>
               )}
             </div>
+
+            {/* Country filter */}
+            {(dashboard?.availableCountries?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                <span className="text-xs text-muted">Гео:</span>
+                <button
+                  onClick={() => setSelectedCountry("")}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
+                    !selectedCountry
+                      ? "bg-accent/20 text-accentSoft border border-accent/30"
+                      : "btn-ghost text-muted hover:text-text"
+                  }`}
+                >
+                  Все страны
+                </button>
+                {dashboard!.availableCountries.map((cc) => (
+                  <button
+                    key={cc}
+                    onClick={() => setSelectedCountry(cc === selectedCountry ? "" : cc)}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-medium font-mono transition-all duration-200 ${
+                      selectedCountry === cc
+                        ? "bg-accent/20 text-accentSoft border border-accent/30"
+                        : "btn-ghost text-muted hover:text-text"
+                    }`}
+                  >
+                    {cc}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* GEO filter pills */}
@@ -982,23 +1043,21 @@ export default function DashboardClient() {
             <div>
               <h2 className="text-lg font-semibold">Воронка конверсии</h2>
               <p className="mt-0.5 text-sm text-muted">
-                От инсталла до активной подписки
+                {dashboard?.activeCountry
+                  ? "Installs / Paywall — только агрегат; Trial / Sub / Active — по гео"
+                  : "От инсталла до активной подписки"}
               </p>
             </div>
-            {funnelBlocks.length > 0 && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              {dashboard?.activeCountry && (
+                <span className="badge badge-violet" title="Гео-фильтр активен">
+                  🌍 {dashboard.activeCountry}
+                </span>
+              )}
+              {funnelBlocks.length > 0 && (
                 <span className="badge badge-violet">{funnelBlocks.length} этапов</span>
-                {dashboard?.latest && (
-                  <span className="badge badge-success">
-                    CR: {formatPercent(
-                      funnelBlocks.length >= 4
-                        ? (funnelBlocks[3].value / Math.max(funnelBlocks[0].value, 1)) * 100
-                        : null
-                    )}
-                  </span>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {funnelBlocks.length > 0 ? (
@@ -1038,14 +1097,18 @@ export default function DashboardClient() {
         >
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
-              <h2 className="text-lg font-semibold">Динамика инсталлов и подписок</h2>
+              <h2 className="text-lg font-semibold">
+                {dashboard?.activeCountry ? "Динамика подписок" : "Динамика инсталлов и подписок"}
+              </h2>
               <p className="mt-0.5 text-sm text-muted">Ежедневные значения за период</p>
             </div>
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-2 text-xs text-muted">
-                <span className="h-2.5 w-2.5 rounded-full bg-primaryBright" />
-                Инсталлы
-              </span>
+              {!dashboard?.activeCountry && (
+                <span className="flex items-center gap-2 text-xs text-muted">
+                  <span className="h-2.5 w-2.5 rounded-full bg-primaryBright" />
+                  Инсталлы
+                </span>
+              )}
               <span className="flex items-center gap-2 text-xs text-muted">
                 <span className="h-2.5 w-2.5 rounded-full bg-success" />
                 Подписки
@@ -1091,16 +1154,18 @@ export default function DashboardClient() {
                     width={44}
                   />
                   <Tooltip content={<ChartTooltip />} />
-                  <Area
-                    type="monotone"
-                    dataKey="installs"
-                    stroke="#8b5cf6"
-                    strokeWidth={2.5}
-                    fill="url(#colorInstalls)"
-                    dot={false}
-                    activeDot={{ r: 5, fill: "#8b5cf6", strokeWidth: 2.5, stroke: "#130f22" }}
-                    animationDuration={500}
-                  />
+                  {!dashboard?.activeCountry && (
+                    <Area
+                      type="monotone"
+                      dataKey="installs"
+                      stroke="#8b5cf6"
+                      strokeWidth={2.5}
+                      fill="url(#colorInstalls)"
+                      dot={false}
+                      activeDot={{ r: 5, fill: "#8b5cf6", strokeWidth: 2.5, stroke: "#130f22" }}
+                      animationDuration={1200}
+                    />
+                  )}
                   <Area
                     type="monotone"
                     dataKey="subscriptions"
@@ -1125,6 +1190,19 @@ export default function DashboardClient() {
         {/* ╔══════════════════════════╗
             ║          TABLE           ║
             ╚══════════════════════════╝ */}
+        {dashboard?.activeCountry ? (
+          <section
+            className="card p-6 section-enter flex items-center gap-4 text-sm text-muted"
+            style={{ animationDelay: "440ms" }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0 text-mutedDark">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            Таблица ежедневных отчётов недоступна в гео-режиме. Выберите «Все страны» для просмотра.
+          </section>
+        ) : (
         <section
           className="card overflow-hidden section-enter"
           style={{ animationDelay: "440ms" }}
@@ -1327,6 +1405,7 @@ export default function DashboardClient() {
             )}
           </div>
         </section>
+        )}
 
         {/* Bottom spacer */}
         <div className="h-6" />

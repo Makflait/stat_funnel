@@ -17,4 +17,5 @@ export const env = {
   jwtSecret: getEnv("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  encryptionKey: getEnv("ENCRYPTION_KEY"),
 };
