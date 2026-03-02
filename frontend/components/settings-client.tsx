@@ -84,10 +84,11 @@ interface IntegrationFormProps {
   onSaved: () => void;
 }
 
-const FIELD_DEFS: Record<IntegrationType, Array<{ key: string; label: string; placeholder: string }>> = {
+const FIELD_DEFS: Record<IntegrationType, Array<{ key: string; label: string; placeholder: string; isOptional?: boolean }>> = {
   APPHUD: [
-    { key: "apiKey", label: "API Key", placeholder: "apphud_sk_..." },
-    { key: "projectId", label: "Project ID", placeholder: "proj_..." },
+    { key: "apiKey", label: "API Key (необязательно)", placeholder: "app_...", isOptional: true },
+    { key: "projectId", label: "Project ID (необязательно)", placeholder: "proj_...", isOptional: true },
+    { key: "webhookSecret", label: "Webhook Secret (опционально)", placeholder: "любой случайный токен", isOptional: true },
   ],
   APPSFLYER: [
     { key: "apiToken", label: "API Token", placeholder: "af_..." },
@@ -109,10 +110,18 @@ function IntegrationForm({ appId, type, existing, onSaved }: IntegrationFormProp
 
     const fd = new FormData(e.currentTarget);
     const credentials: Record<string, string> = {};
+    const SETTINGS_KEYS = new Set(["webhookSecret"]);
+    const settings: Record<string, string> = {};
     for (const f of fields) {
-      credentials[f.key] = String(fd.get(f.key) ?? "").trim();
+      const val = String(fd.get(f.key) ?? "").trim();
+      if (SETTINGS_KEYS.has(f.key)) {
+        if (val) settings[f.key] = val;
+      } else {
+        credentials[f.key] = val;
+      }
     }
     const timezone = String(fd.get("timezone") ?? "").trim() || undefined;
+    if (timezone) settings.timezone = timezone;
 
     try {
       await apiRequest("/integrations", {
@@ -121,7 +130,7 @@ function IntegrationForm({ appId, type, existing, onSaved }: IntegrationFormProp
           appId,
           type,
           credentials,
-          settings: timezone ? { timezone } : {},
+          settings,
         }),
       });
       setSuccess(true);
@@ -142,7 +151,7 @@ function IntegrationForm({ appId, type, existing, onSaved }: IntegrationFormProp
             <input
               name={f.key}
               type="password"
-              required
+              required={!f.isOptional}
               placeholder={existing ? "••••••••" : f.placeholder}
               className="input-field py-2 text-sm font-mono"
             />
@@ -497,8 +506,8 @@ export default function SettingsClient() {
                   <div className="mb-4">
                     <h2 className="text-sm font-semibold text-text">Apphud</h2>
                     <p className="mt-1 text-xs text-muted">
-                      Подтягивает данные о подписках: триалы, отмены, доход, рефанды, активные подписки.
-                      Apphud возвращает дневные агрегаты.
+                      Получает данные о подписках через Webhook: триалы, конверсии, отмены, доход.
+                      Настройте URL ниже в Apphud → Settings → Integrations → Webhooks.
                     </p>
                     {apphudInt?.lastSyncError && (
                       <p className="mt-2 text-xs text-dangerSoft">
@@ -506,6 +515,33 @@ export default function SettingsClient() {
                       </p>
                     )}
                   </div>
+
+                  {/* Webhook URL block */}
+                  {selectedAppId && (
+                    <div className="mb-4 rounded-xl border border-border/50 bg-surface/40 p-3 space-y-2">
+                      <p className="text-xs font-medium text-muted">Webhook URL для Apphud</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 rounded-lg border border-border/40 bg-panel/60 px-3 py-1.5 text-xs font-mono text-primarySoft break-all">
+                          {typeof window !== "undefined" ? window.location.origin : "https://funnel.grebalux.com"}/webhook/apphud/{selectedAppId}
+                        </code>
+                        <button
+                          type="button"
+                          className="btn btn-ghost py-1.5 px-2.5 text-xs text-muted shrink-0"
+                          onClick={() => {
+                            const url = `${window.location.origin}/webhook/apphud/${selectedAppId}`;
+                            navigator.clipboard.writeText(url);
+                          }}
+                        >
+                          Копировать
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-muted">
+                        В Apphud: Settings → Integrations → Webhooks → Add Webhook → вставьте URL выше.
+                        Укажите тот же Secret token в поле ниже (опционально).
+                      </p>
+                    </div>
+                  )}
+
                   <IntegrationForm
                     appId={selectedAppId}
                     type="APPHUD"
