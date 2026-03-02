@@ -140,8 +140,73 @@ export function buildKpis(report: Pick<
     crTrialToSubscription: pct(report.subscriptionStartedTotal, report.trialStartedTotal),
     netSubscriptionGrowth: report.netGrowthDay,
     activeSubscriptions: report.subscriptionActiveTotal,
+    revenueDay: revenue,
     arpu: report.installDay > 0 ? revenue / report.installDay : null,
     cac: report.installDay > 0 && adSpend > 0 ? adSpend / report.installDay : null,
+  };
+}
+
+// ─── Geo funnel & KPIs ────────────────────────────────────────────────────────
+
+export interface GeoFunnelInput {
+  trials: number;
+  subscriptions: number;
+  active: number;
+}
+
+export interface GeoKpisInput {
+  trials: number;
+  subscriptions: number;
+  cancellations: number;
+  active: number;
+  revenue: number;
+}
+
+/**
+ * Builds a partial funnel from Apphud geo data.
+ * Only Trial → Subscription → Active stages are returned (no Install/Paywall — no geo data from AppsFlyer).
+ */
+export function buildGeoFunnel(input: GeoFunnelInput): FunnelStage[] {
+  const { trials, subscriptions, active } = input;
+  return [
+    {
+      key: "trial",
+      label: "Trial started",
+      value: trials,
+      percentFromPrevious: null,
+      percentFromInstalls: null,
+    },
+    {
+      key: "sub",
+      label: "Subscription started",
+      value: subscriptions,
+      percentFromPrevious: pct(subscriptions, trials),
+      percentFromInstalls: null,
+    },
+    {
+      key: "active",
+      label: "Active subscription",
+      value: active,
+      percentFromPrevious: pct(active, subscriptions),
+      percentFromInstalls: null,
+    },
+  ];
+}
+
+/**
+ * Builds KPIs from Apphud geo data.
+ * Install-dependent metrics (crInstallToPaywall, crPaywallToTrial, ARPU, CAC) are null.
+ */
+export function buildGeoKpis(input: GeoKpisInput) {
+  return {
+    crInstallToPaywall: null as number | null,
+    crPaywallToTrial: null as number | null,
+    crTrialToSubscription: pct(input.subscriptions, input.trials),
+    netSubscriptionGrowth: input.subscriptions - input.cancellations,
+    activeSubscriptions: input.active,
+    revenueDay: input.revenue,
+    arpu: null as number | null,
+    cac: null as number | null,
   };
 }
 

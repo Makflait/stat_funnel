@@ -28,9 +28,71 @@ model App {
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  reports Report[]
+  reports      Report[]
+  integrations Integration[]
+  adSpends     AdSpendDaily[]
+  geoReports   GeoReport[]
 
   @@index([ownerId])
+}
+
+enum IntegrationType {
+  APPHUD
+  APPSFLYER
+}
+
+model Integration {
+  id                   String          @id @default(cuid())
+  appId                String
+  app                  App             @relation(fields: [appId], references: [id], onDelete: Cascade)
+  type                 IntegrationType
+  credentialsEncrypted String
+  settings             Json            @default("{}")
+  isEnabled            Boolean         @default(true)
+  lastSyncAt           DateTime?
+  lastSyncError        String?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@unique([appId, type])
+  @@index([appId])
+}
+
+model AdSpendDaily {
+  id        String   @id @default(cuid())
+  appId     String
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date      DateTime
+  source    String
+  spend     Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, date, source])
+  @@index([appId, date])
+}
+
+model GeoReport {
+  id                       String   @id @default(cuid())
+  appId                    String
+  app                      App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date                     DateTime
+  country                  String
+
+  trialStartedDay          Int      @default(0)
+  subscriptionStartedDay   Int      @default(0)
+  subscriptionCancelledDay Int      @default(0)
+  activeSubscriptionsDay   Int      @default(0)
+  netGrowthDay             Int      @default(0)
+  revenueDay               Decimal  @db.Decimal(10, 2) @default(0)
+  refundsDay               Decimal  @db.Decimal(10, 2) @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, date, country])
+  @@index([appId, date])
+  @@index([appId, country])
 }
 
 model Report {

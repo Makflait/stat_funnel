@@ -44,6 +44,7 @@ export interface Kpis {
   crTrialToSubscription: number | null;
   netSubscriptionGrowth: number;
   activeSubscriptions: number;
+  revenueDay: number;
   arpu: number | null;
   cac: number | null;
 }
@@ -55,4 +56,34 @@ export interface DashboardResponse {
   trend: Array<{ date: string; installs: number; subscriptions: number }>;
   table: Report[];
   latest: Report | null;
+  availableCountries: string[];
+  activeCountry: string | null;
+}
+
+export type IntegrationType = "APPHUD" | "APPSFLYER";
+
+export interface Integration {
+  id: string;
+  appId: string;
+  type: IntegrationType;
+  isEnabled: boolean;
+  settings: Record<string, unknown>;
+  lastSyncAt: string | null;
+  lastSyncError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SyncResult {
+  daysProcessed: number;
+  updatedCount: number;
+  geoRowsUpdated: number;
+  errors: string[];
+}
+
+export interface AdSpendRow {
+  id: string;
+  date: string;
+  source: string;
+  spend: number;
 }
