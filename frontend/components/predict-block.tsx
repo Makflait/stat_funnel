@@ -351,12 +351,27 @@ interface PredictBlockProps {
   liveDataByGeo?: GeoLiveData[] | null;
 }
 
-/** Compute aggregate liveData from all GEOs (weighted by installs) */
+/** Compute aggregate liveData from all GEOs (weighted by installs, or simple avg if no installs) */
 function aggregateLiveData(byGeo: GeoLiveData[]): PredictLiveData {
   const totalInstalls = byGeo.reduce((s, g) => s + g.avgDailyInstalls, 0);
+
+  // When no install data (e.g. Apphud-only mode), use simple average of available CRs
   if (totalInstalls === 0) {
-    return { avgDailyInstalls: 0, crPaywallToTrial: null, crTrialToSub: null };
+    const withPaywall = byGeo.filter((g) => g.crPaywallToTrial != null);
+    const withTrial = byGeo.filter((g) => g.crTrialToSub != null);
+    const withPrice = byGeo.filter((g) => (g.subscriptionPrice ?? 0) > 0);
+    return {
+      avgDailyInstalls: 0,
+      crPaywallToTrial: withPaywall.length > 0
+        ? withPaywall.reduce((s, g) => s + g.crPaywallToTrial!, 0) / withPaywall.length
+        : null,
+      crTrialToSub: withTrial.length > 0
+        ? withTrial.reduce((s, g) => s + g.crTrialToSub!, 0) / withTrial.length
+        : null,
+      subscriptionPrice: withPrice.length > 0 ? withPrice[0].subscriptionPrice : null,
+    };
   }
+
   let crPaywall = 0, crTrial = 0, hasPaywall = false, hasTrial = false;
   for (const g of byGeo) {
     const w = g.avgDailyInstalls / totalInstalls;
@@ -452,8 +467,8 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
     if (compareId === id) setCompareId(null);
   }
 
-  const hasLiveData = liveData != null;
-  const hasMultipleGeos = (liveDataByGeo?.length ?? 0) > 1;
+  const hasLiveData = liveData != null && (liveData.crTrialToSub != null || liveData.crPaywallToTrial != null || (liveData.subscriptionPrice ?? 0) > 0);
+  const hasGeoSelector = (liveDataByGeo?.length ?? 0) >= 1;
 
   return (
     <section className="card p-5 sm:p-6 section-enter" style={{ animationDelay: "480ms" }}>
@@ -477,7 +492,7 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
             )}
 
             {/* GEO selector */}
-            {hasMultipleGeos && liveDataByGeo && (
+            {hasGeoSelector && liveDataByGeo && (
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setSelectedGeo("ALL")}
