@@ -149,15 +149,60 @@ router.get("/", async (req, res, next) => {
       orderBy: [{ date: "asc" }, { geo: "asc" }],
     });
 
-    // ── 5. No data case ────────────────────────────────────────────────────────
+    // ── 5. No Report data → fallback to GeoReport aggregate ──────────────────
     if (!reports.length) {
+      const allGeoRows = await prisma.geoReport.findMany({
+        where: { appId: app.id, date: { gte: fromDate, lte: toDate } },
+        orderBy: [{ country: "asc" }, { date: "asc" }],
+      });
+
+      if (!allGeoRows.length) {
+        return res.status(200).json({
+          app, geos, geoBreakdown: [], funnel: [], kpis: null,
+          trend: [], table: [], latest: null, availableCountries, activeCountry: null,
+        });
+      }
+
+      const sumTrials = allGeoRows.reduce((s, r) => s + r.trialStartedDay, 0);
+      const sumSubs = allGeoRows.reduce((s, r) => s + r.subscriptionStartedDay, 0);
+      const sumCancels = allGeoRows.reduce((s, r) => s + r.subscriptionCancelledDay, 0);
+      const sumRevenue = allGeoRows.reduce((s, r) => s + Number(r.revenueDay), 0);
+      const sumActive = allGeoRows.reduce((s, r) => s + r.activeSubscriptionsDay, 0);
+      const sumPurchasesRev = allGeoRows.reduce((s, r) => s + Number(r.purchasesRevenueDay), 0);
+
+      const trendByDate = new Map<string, number>();
+      for (const r of allGeoRows) {
+        const dk = r.date.toISOString().slice(0, 10);
+        trendByDate.set(dk, (trendByDate.get(dk) ?? 0) + r.subscriptionStartedDay);
+      }
+      const trend = Array.from(trendByDate.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, subs]) => ({ date, installs: 0, subscriptions: subs }));
+
+      const countryAgg = new Map<string, { trials: number; subs: number; cancels: number; revenue: number; active: number }>();
+      for (const r of allGeoRows) {
+        const e = countryAgg.get(r.country) ?? { trials: 0, subs: 0, cancels: 0, revenue: 0, active: 0 };
+        e.trials += r.trialStartedDay;
+        e.subs += r.subscriptionStartedDay;
+        e.cancels += r.subscriptionCancelledDay;
+        e.revenue += Number(r.revenueDay);
+        e.active += r.activeSubscriptionsDay;
+        countryAgg.set(r.country, e);
+      }
+      const geoBreakdownFromGeo = Array.from(countryAgg.entries()).map(([country, d]) => ({
+        geo: country,
+        kpis: buildGeoKpis({ trials: d.trials, subscriptions: d.subs, cancellations: d.cancels, active: d.active, revenue: d.revenue }),
+        avgDailyInstalls: 0,
+        avgSubPrice: d.subs > 0 ? d.revenue / d.subs : null,
+      }));
+
       return res.status(200).json({
         app,
         geos,
-        geoBreakdown: [],
-        funnel: [],
-        kpis: null,
-        trend: [],
+        geoBreakdown: geoBreakdownFromGeo,
+        funnel: buildGeoFunnel({ trials: sumTrials, subscriptions: sumSubs, active: sumActive }),
+        kpis: buildGeoKpis({ trials: sumTrials, subscriptions: sumSubs, cancellations: sumCancels, active: sumActive, revenue: sumRevenue, purchasesRevenue: sumPurchasesRev }),
+        trend,
         table: [],
         latest: null,
         availableCountries,
@@ -178,17 +223,20 @@ router.get("/", async (req, res, next) => {
         });
 
         if (!geoReports.length) {
-          return { geo, kpis: null, avgDailyInstalls: 0 };
+          return { geo, kpis: null, avgDailyInstalls: 0, avgSubPrice: null };
         }
 
         const latestGeo = geoReports[geoReports.length - 1];
         const installSum = geoReports.reduce((sum, r) => sum + r.installDay, 0);
         const avgDailyInstalls = installSum / geoReports.length;
+        const revenueSum = geoReports.reduce((s, r) => s + Number(r.revenueDay), 0);
+        const subsSum = geoReports.reduce((s, r) => s + r.subscriptionStartedDay, 0);
 
         return {
           geo,
           kpis: buildKpis(latestGeo),
           avgDailyInstalls,
+          avgSubPrice: subsSum > 0 ? revenueSum / subsSum : null,
         };
       })
     );

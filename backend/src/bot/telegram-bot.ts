@@ -109,51 +109,100 @@ function parseApphudMessage(text: string): ParsedEvent | null {
     }
   }
 
-  return { type: eventType, country, price };
+  // Parse "User ID: <uuid>" for deduplication reference
+  let apphudUserId: string | undefined;
+  for (const line of lines) {
+    const m = line.match(/^User\s*ID:\s*([0-9A-F-]{36})/i);
+    if (m) {
+      apphudUserId = m[1];
+      break;
+    }
+  }
+
+  return { type: eventType, country, price, apphudUserId };
 }
 
 interface ParsedEvent {
   type: "trial" | "sub" | "cancel" | "renew" | "refund" | "billing_issue" | "purchase";
   country: string;
   price: number;
+  apphudUserId?: string;
 }
 
 // ─── DB writer ────────────────────────────────────────────────────────────────
 
-async function recordEvent(appId: string, event: ParsedEvent, date: Date): Promise<void> {
+/**
+ * Record a Telegram Apphud event.
+ * @param messageId - Telegram message_id used for deduplication (skip if already seen)
+ */
+async function recordEvent(
+  appId: string,
+  event: ParsedEvent,
+  date: Date,
+  messageId: string,
+): Promise<boolean> {
+  // ── Deduplication ────────────────────────────────────────────────────────
+  // Skip if we have already processed this Telegram message.
+  const alreadySeen = await prisma.telegramEventLog.findUnique({
+    where: { appId_messageId: { appId, messageId } },
+    select: { id: true },
+  });
+  if (alreadySeen) {
+    console.log(`[telegram] Duplicate message skipped: ${messageId}`);
+    return false;
+  }
+
   const dec = (n: number) => new Prisma.Decimal(n);
   const dateOnly = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 
   const deltaTrials    = event.type === "trial" ? 1 : 0;
   const deltaSubs      = event.type === "sub" ? 1 : 0;
   const deltaCancels   = event.type === "cancel" ? 1 : 0;
-  const deltaRevenue   = (event.type === "sub" || event.type === "renew" || event.type === "purchase") ? event.price : 0;
+  const deltaRevenue   = (event.type === "sub" || event.type === "renew") ? event.price : 0;
   const deltaRefunds   = event.type === "refund" ? event.price : 0;
+  const deltaPurchases = event.type === "purchase" ? 1 : 0;
+  const deltaPurchaseRev = event.type === "purchase" ? event.price : 0;
   const deltaNetGrowth = deltaSubs - deltaCancels;
 
-  await prisma.geoReport.upsert({
-    where: { appId_date_country: { appId, date: dateOnly, country: event.country } },
-    create: {
-      appId,
-      date: dateOnly,
-      country: event.country,
-      trialStartedDay: deltaTrials,
-      subscriptionStartedDay: deltaSubs,
-      subscriptionCancelledDay: deltaCancels,
-      netGrowthDay: deltaNetGrowth,
-      activeSubscriptionsDay: 0,
-      revenueDay: dec(deltaRevenue),
-      refundsDay: dec(deltaRefunds),
-    },
-    update: {
-      trialStartedDay: { increment: deltaTrials },
-      subscriptionStartedDay: { increment: deltaSubs },
-      subscriptionCancelledDay: { increment: deltaCancels },
-      netGrowthDay: { increment: deltaNetGrowth },
-      revenueDay: { increment: dec(deltaRevenue) },
-      refundsDay: { increment: dec(deltaRefunds) },
-    },
-  });
+  await prisma.$transaction([
+    prisma.geoReport.upsert({
+      where: { appId_date_country: { appId, date: dateOnly, country: event.country } },
+      create: {
+        appId,
+        date: dateOnly,
+        country: event.country,
+        trialStartedDay: deltaTrials,
+        subscriptionStartedDay: deltaSubs,
+        subscriptionCancelledDay: deltaCancels,
+        netGrowthDay: deltaNetGrowth,
+        activeSubscriptionsDay: 0,
+        revenueDay: dec(deltaRevenue),
+        refundsDay: dec(deltaRefunds),
+        purchasesDay: deltaPurchases,
+        purchasesRevenueDay: dec(deltaPurchaseRev),
+      },
+      update: {
+        trialStartedDay: { increment: deltaTrials },
+        subscriptionStartedDay: { increment: deltaSubs },
+        subscriptionCancelledDay: { increment: deltaCancels },
+        netGrowthDay: { increment: deltaNetGrowth },
+        revenueDay: { increment: dec(deltaRevenue) },
+        refundsDay: { increment: dec(deltaRefunds) },
+        purchasesDay: { increment: deltaPurchases },
+        purchasesRevenueDay: { increment: dec(deltaPurchaseRev) },
+      },
+    }),
+    prisma.telegramEventLog.create({
+      data: {
+        appId,
+        messageId,
+        eventType: event.type,
+        apphudUserId: event.apphudUserId,
+      },
+    }),
+  ]);
+
+  return true;
 }
 
 // ─── Reply helpers ─────────────────────────────────────────────────────────────
@@ -251,8 +300,10 @@ export function createTelegramBot(): Bot | null {
         subs: acc.subs + r.subscriptionStartedDay,
         cancels: acc.cancels + r.subscriptionCancelledDay,
         revenue: acc.revenue + Number(r.revenueDay),
+        purchases: acc.purchases + r.purchasesDay,
+        purchasesRev: acc.purchasesRev + Number(r.purchasesRevenueDay),
       }),
-      { trials: 0, subs: 0, cancels: 0, revenue: 0 }
+      { trials: 0, subs: 0, cancels: 0, revenue: 0, purchases: 0, purchasesRev: 0 }
     );
 
     const lines = [
@@ -261,6 +312,7 @@ export function createTelegramBot(): Bot | null {
       `✅ Подписки: ${totals.subs}`,
       `❌ Отмены: ${totals.cancels}`,
       `💰 Revenue: $${totals.revenue.toFixed(2)}`,
+      ...(totals.purchases > 0 ? [`🛒 Кредиты: ${totals.purchases} · $${totals.purchasesRev.toFixed(2)}`] : []),
       "",
       ...rows.map(
         (r) =>
@@ -275,7 +327,8 @@ export function createTelegramBot(): Bot | null {
     if (!isAllowed(ctx)) return;
     const args = ctx.match.trim().toUpperCase().split(/\s+/);
     const event: ParsedEvent = { type: "trial", country: args[0] || "XX", price: 0 };
-    await recordEvent(appId, event, new Date());
+    const msgId = `manual-${ctx.message?.message_id ?? Date.now()}`;
+    await recordEvent(appId, event, new Date(), msgId);
     await ctx.reply(eventReply(event));
   });
 
@@ -288,7 +341,8 @@ export function createTelegramBot(): Bot | null {
       country: (args[0] ?? "XX").toUpperCase(),
       price: Number(args[1] ?? 0),
     };
-    await recordEvent(appId, event, new Date());
+    const msgId = `manual-${ctx.message?.message_id ?? Date.now()}`;
+    await recordEvent(appId, event, new Date(), msgId);
     await ctx.reply(eventReply(event));
   });
 
@@ -297,7 +351,8 @@ export function createTelegramBot(): Bot | null {
     if (!isAllowed(ctx)) return;
     const args = ctx.match.trim().toUpperCase().split(/\s+/);
     const event: ParsedEvent = { type: "cancel", country: args[0] || "XX", price: 0 };
-    await recordEvent(appId, event, new Date());
+    const msgId = `manual-${ctx.message?.message_id ?? Date.now()}`;
+    await recordEvent(appId, event, new Date(), msgId);
     await ctx.reply(eventReply(event));
   });
 
@@ -310,7 +365,8 @@ export function createTelegramBot(): Bot | null {
       country: (args[0] ?? "XX").toUpperCase(),
       price: Number(args[1] ?? 0),
     };
-    await recordEvent(appId, event, new Date());
+    const msgId = `manual-${ctx.message?.message_id ?? Date.now()}`;
+    await recordEvent(appId, event, new Date(), msgId);
     await ctx.reply(eventReply(event));
   });
 
@@ -323,7 +379,8 @@ export function createTelegramBot(): Bot | null {
       country: (args[0] ?? "XX").toUpperCase(),
       price: Number(args[1] ?? 0),
     };
-    await recordEvent(appId, event, new Date());
+    const msgId = `manual-${ctx.message?.message_id ?? Date.now()}`;
+    await recordEvent(appId, event, new Date(), msgId);
     await ctx.reply(eventReply(event));
   });
 
@@ -356,9 +413,12 @@ export function createTelegramBot(): Bot | null {
       ? new Date(ctx.message.date * 1000)
       : new Date();
 
-    await recordEvent(appId, event, msgDate);
-    console.log(`[telegram] Apphud event recorded: ${event.type} ${event.country} $${event.price}`);
-    await ctx.react("👍").catch(() => {});
+    const msgId = `msg-${ctx.message.message_id}`;
+    const recorded = await recordEvent(appId, event, msgDate, msgId);
+    if (recorded) {
+      console.log(`[telegram] Apphud event recorded: ${event.type} ${event.country} $${event.price}`);
+      await ctx.react("👍").catch(() => {});
+    }
   });
 
   // ── Auto-parse Apphud messages (channel — preferred method) ────────────────
@@ -379,8 +439,11 @@ export function createTelegramBot(): Bot | null {
       ? new Date(ctx.channelPost.date * 1000)
       : new Date();
 
-    await recordEvent(appId, event, msgDate);
-    console.log(`[telegram] Channel Apphud event recorded: ${event.type} ${event.country} $${event.price}`);
+    const msgId = `ch-${ctx.channelPost.message_id}`;
+    const recorded = await recordEvent(appId, event, msgDate, msgId);
+    if (recorded) {
+      console.log(`[telegram] Channel event recorded: ${event.type} ${event.country} $${event.price} (apphudUser=${event.apphudUserId ?? "?"})`);
+    }
   });
 
   bot.catch((err) => {

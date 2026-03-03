@@ -1,20 +1,28 @@
 import type { AppsFlyerCredentials, AppsFlyerDailyMetrics, IntegrationSettings } from "./types.js";
 import { formatDateOnlyUtc } from "../utils/date.js";
 
-const APPSFLYER_API_BASE = "https://hq.appsflyer.com";
-const REQUEST_TIMEOUT_MS = 30_000;
-
 /**
- * Fetch daily install metrics from AppsFlyer Pull API v5.
+ * AppsFlyer Pull API v5 — Raw Data endpoints.
  *
- * Endpoint: GET /export/{app_id}/partners_by_date_report/v5
- * Auth: api_token query param (V1) or Authorization: Bearer (V2 JWT).
- *       Both are sent — AppsFlyer will use whichever is valid.
- * Response: CSV with one row per (date, media_source, campaign).
- *           We group by date and sum installs.
+ * Base URL: https://hq1.appsflyer.com/api/raw-data/export/app/{app_id}/
+ * Endpoints:
+ *   installs_report/v5         — non-organic installs (real-time)
+ *   organic_installs_report/v5 — organic installs (real-time)
  *
- * Docs: https://dev.appsflyer.com/hc/reference/get_app-id-partners-by-date-report-v5-1
+ * Each row in the CSV is one install. The "Install Time" column gives the
+ * timestamp; we extract the date part and count rows per day.
+ *
+ * Auth: Authorization: Bearer {api_v2_token}  OR  ?api_token={api_v1_token}
+ * Both are sent so either token format works.
+ *
+ * Docs: https://support.appsflyer.com/hc/en-us/articles/207034346-Pull-API
  */
+
+const APPSFLYER_API_BASE = "https://hq1.appsflyer.com/api/raw-data/export/app";
+const REQUEST_TIMEOUT_MS = 45_000;
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export async function fetchAppsFlyerMetrics(
   credentials: AppsFlyerCredentials,
   settings: IntegrationSettings,
@@ -22,16 +30,58 @@ export async function fetchAppsFlyerMetrics(
   to: Date,
 ): Promise<AppsFlyerDailyMetrics[]> {
   const timezone = String(settings.timezone || "UTC");
-
   const params = new URLSearchParams({
-    api_token: credentials.apiToken, // V1 token auth
+    api_token: credentials.apiToken, // V1 token
     from: formatDateOnlyUtc(from),
     to: formatDateOnlyUtc(to),
     timezone,
   });
 
-  const url = `${APPSFLYER_API_BASE}/export/${credentials.appId}/partners_by_date_report/v5?${params}`;
+  const base = `${APPSFLYER_API_BASE}/${credentials.appId}`;
 
+  // Fetch non-organic and organic in parallel; gracefully handle one failing
+  const [nonOrganic, organic] = await Promise.allSettled([
+    fetchAndCount(`${base}/installs_report/v5?${params}`, credentials.apiToken),
+    fetchAndCount(`${base}/organic_installs_report/v5?${params}`, credentials.apiToken),
+  ]);
+
+  const combined = new Map<string, number>();
+
+  if (nonOrganic.status === "fulfilled") {
+    for (const [date, count] of nonOrganic.value) {
+      combined.set(date, (combined.get(date) ?? 0) + count);
+    }
+  } else {
+    console.warn(`[appsflyer] non-organic fetch failed: ${nonOrganic.reason}`);
+  }
+
+  if (organic.status === "fulfilled") {
+    for (const [date, count] of organic.value) {
+      combined.set(date, (combined.get(date) ?? 0) + count);
+    }
+  } else {
+    console.warn(`[appsflyer] organic fetch failed: ${organic.reason}`);
+  }
+
+  if (combined.size === 0) {
+    const reasons = [
+      nonOrganic.status === "rejected" ? String(nonOrganic.reason) : null,
+      organic.status === "rejected" ? String(organic.reason) : null,
+    ]
+      .filter(Boolean)
+      .join("; ");
+    throw new Error(`AppsFlyer: both endpoints failed — ${reasons}`);
+  }
+
+  return Array.from(combined.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, installs]) => ({ date, installs, paywallImpressions: 0 }));
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/** Fetch one AppsFlyer raw-data endpoint and return installs-per-date counts. */
+async function fetchAndCount(url: string, token: string): Promise<Map<string, number>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -39,7 +89,7 @@ export async function fetchAppsFlyerMetrics(
   try {
     const res = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${credentials.apiToken}`, // V2 JWT token auth
+        Authorization: `Bearer ${token}`, // V2 JWT token
         Accept: "text/plain,text/csv,*/*",
       },
       signal: controller.signal,
@@ -55,56 +105,44 @@ export async function fetchAppsFlyerMetrics(
     clearTimeout(timer);
   }
 
-  return parseCsvToMetrics(csv);
+  return parseRawInstallsCsv(csv);
 }
 
-// ─── CSV parsing ──────────────────────────────────────────────────────────────
-
-/** Parse AppsFlyer CSV and aggregate installs by date (sum across all media sources). */
-function parseCsvToMetrics(csv: string): AppsFlyerDailyMetrics[] {
+/**
+ * Parse raw installs CSV.
+ * Each row = 1 install. Extract date from "Install Time" column and count per day.
+ */
+function parseRawInstallsCsv(csv: string): Map<string, number> {
+  const byDate = new Map<string, number>();
   const lines = csv.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
+  if (lines.length < 2) return byDate;
 
   const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
 
-  const dateIdx = headers.indexOf("date");
-  const installsIdx = headers.indexOf("installs");
+  // AppsFlyer raw data uses "Install Time" (format: "YYYY-MM-DD HH:MM:SS")
+  let timeIdx = headers.indexOf("install time");
+  if (timeIdx === -1) timeIdx = headers.indexOf("event time"); // fallback
 
-  if (dateIdx === -1) {
-    throw new Error(
-      `AppsFlyer CSV missing "Date" column. Got columns: ${headers.slice(0, 12).join(", ")}`,
+  if (timeIdx === -1) {
+    console.warn(
+      `[appsflyer] CSV missing "Install Time" column. Got: ${headers.slice(0, 10).join(", ")}`,
     );
+    return byDate;
   }
-
-  // Group installs by YYYY-MM-DD (multiple rows per date — one per media source)
-  const byDate = new Map<string, number>();
 
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i]);
-
-    const rawDate = cols[dateIdx]?.trim() ?? "";
-    // Take first 10 chars to normalize "2025-03-03 00:00:00" → "2025-03-03"
-    const date = rawDate.slice(0, 10);
+    const rawTime = cols[timeIdx]?.trim() ?? "";
+    // "YYYY-MM-DD HH:MM:SS" → take first 10 chars
+    const date = rawTime.slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-
-    const installs =
-      installsIdx !== -1
-        ? Math.max(0, parseInt(cols[installsIdx]?.trim() || "0", 10) || 0)
-        : 0;
-
-    byDate.set(date, (byDate.get(date) ?? 0) + installs);
+    byDate.set(date, (byDate.get(date) ?? 0) + 1);
   }
 
-  return Array.from(byDate.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, installs]) => ({
-      date,
-      installs,
-      paywallImpressions: 0, // not tracked in aggregate report
-    }));
+  return byDate;
 }
 
-/** Minimal CSV line parser that handles double-quoted fields with embedded commas. */
+/** Minimal CSV line parser handling double-quoted fields with embedded commas. */
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -114,7 +152,7 @@ function parseCSVLine(line: string): string[] {
     const ch = line[i];
     if (ch === '"') {
       if (inQuotes && line[i + 1] === '"') {
-        current += '"'; // escaped quote
+        current += '"';
         i++;
       } else {
         inQuotes = !inQuotes;

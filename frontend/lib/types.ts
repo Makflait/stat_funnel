@@ -46,6 +46,7 @@ export interface Kpis {
   netSubscriptionGrowth: number;
   activeSubscriptions: number;
   revenueDay: number;
+  purchasesRevenueDay?: number;
   arpu: number | null;
   cac: number | null;
 }
@@ -54,6 +55,7 @@ export interface GeoBreakdown {
   geo: string;
   kpis: Kpis | null;
   avgDailyInstalls: number;
+  avgSubPrice?: number | null;
 }
 
 export interface DashboardResponse {

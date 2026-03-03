@@ -525,7 +525,7 @@ export default function DashboardClient() {
       crPaywallToTrial: g.kpis?.crPaywallToTrial ?? null,
       crTrialToSub: g.kpis?.crTrialToSubscription ?? null,
       avgDailyInstalls: g.avgDailyInstalls,
-      subscriptionPrice: null,
+      subscriptionPrice: g.avgSubPrice ?? null,
     }));
   }, [dashboard?.geoBreakdown, dashboard?.activeCountry, dashboard?.kpis, dashboard?.funnel]);
 
@@ -767,7 +767,9 @@ export default function DashboardClient() {
         icon: <IconDollar />,
         iconBg: "rgba(16, 185, 129, 0.14)",
         iconColor: "#34d399",
-        description: "Выручка за период",
+        description: (kpis.purchasesRevenueDay ?? 0) > 0
+          ? `Подписки + продления · 🛒 Кредиты: ${formatCurrency(kpis.purchasesRevenueDay ?? 0)}`
+          : "Выручка за период (подписки + продления)",
         delay: isGeo ? 240 : 400,
         geoRelevant: true,
       },

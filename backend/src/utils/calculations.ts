@@ -169,6 +169,7 @@ export interface GeoKpisInput {
   cancellations: number;
   active: number;
   revenue: number;
+  purchasesRevenue?: number;
 }
 
 /**
@@ -214,6 +215,7 @@ export function buildGeoKpis(input: GeoKpisInput) {
     netSubscriptionGrowth: input.subscriptions - input.cancellations,
     activeSubscriptions: input.active,
     revenueDay: input.revenue,
+    purchasesRevenueDay: input.purchasesRevenue ?? 0,
     arpu: null as number | null,
     cac: null as number | null,
   };

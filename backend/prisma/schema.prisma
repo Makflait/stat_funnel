@@ -86,6 +86,8 @@ model GeoReport {
   netGrowthDay             Int      @default(0)
   revenueDay               Decimal  @db.Decimal(10, 2) @default(0)
   refundsDay               Decimal  @db.Decimal(10, 2) @default(0)
+  purchasesDay             Int      @default(0)
+  purchasesRevenueDay      Decimal  @db.Decimal(10, 2) @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -93,6 +95,18 @@ model GeoReport {
   @@unique([appId, date, country])
   @@index([appId, date])
   @@index([appId, country])
+}
+
+model TelegramEventLog {
+  id           String   @id @default(cuid())
+  appId        String
+  messageId    String   // Telegram channel message_id (unique per channel post)
+  eventType    String   // trial | sub | cancel | renew | refund | billing_issue | purchase
+  apphudUserId String?  // User ID parsed from Apphud notification (for reference)
+  createdAt    DateTime @default(now())
+
+  @@unique([appId, messageId])
+  @@index([appId, createdAt])
 }
 
 model Report {
