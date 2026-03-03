@@ -86,12 +86,14 @@ function rangeFromPeriod(period: Period, customFrom: string, customTo: string) {
 
 function buildFunnelBlocks(funnel: DashboardResponse["funnel"] | undefined): FunnelBlock[] {
   if (!funnel?.length) return [];
-  const baseValue = Math.max(funnel[0].value, 1);
+  // Use the maximum value across ALL stages as base — prevents any block from
+  // exceeding 100% width even if a later stage has more entries than the first
+  // (e.g. subscriptions recorded without matching trials in Apphud geo mode).
+  const baseValue = Math.max(1, ...funnel.map((s) => s.value));
 
   return funnel.map((stage, index) => {
-    // Real percentage for visual width, min 12% so last stages are still visible
-    const rawWidth = index === 0 ? 100 : Math.round((stage.value / baseValue) * 100);
-    const widthPercent = index === 0 ? 100 : Math.max(12, rawWidth);
+    const rawWidth = Math.round((stage.value / baseValue) * 100);
+    const widthPercent = Math.max(12, rawWidth);
     const [gradientFrom, gradientTo] = FUNNEL_GRADIENTS[index % FUNNEL_GRADIENTS.length];
     return {
       key: stage.key,
@@ -490,8 +492,32 @@ export default function DashboardClient() {
     [dashboard?.funnel]
   );
 
-  // Compute per-GEO live data array for the predict block
+  // Compute per-GEO live data array for the predict block.
+  // Two sources:
+  //   1. Apphud GeoReport country mode (dashboard.activeCountry is set)
+  //   2. Classic Report geo breakdown mode
   const predictLiveDataByGeo = useMemo<Array<PredictLiveData & { geo: string }> | null>(() => {
+    // ── Apphud country mode ──────────────────────────────────────────────────
+    if (dashboard?.activeCountry && dashboard.kpis) {
+      const subStage = dashboard.funnel?.find((s) => s.key === "sub");
+      const subCount = subStage?.value ?? 0;
+      // Avg price per new subscriber in the selected period
+      const avgSubPrice =
+        subCount > 0 && dashboard.kpis.revenueDay > 0
+          ? dashboard.kpis.revenueDay / subCount
+          : null;
+      return [
+        {
+          geo: dashboard.activeCountry,
+          crPaywallToTrial: null, // not available from Apphud
+          crTrialToSub: dashboard.kpis.crTrialToSubscription,
+          avgDailyInstalls: 0,
+          subscriptionPrice: avgSubPrice,
+        },
+      ];
+    }
+
+    // ── Classic Report geo breakdown mode ────────────────────────────────────
     const breakdown: GeoBreakdown[] = dashboard?.geoBreakdown ?? [];
     if (!breakdown.length) return null;
     return breakdown.map((g) => ({
@@ -499,8 +525,9 @@ export default function DashboardClient() {
       crPaywallToTrial: g.kpis?.crPaywallToTrial ?? null,
       crTrialToSub: g.kpis?.crTrialToSubscription ?? null,
       avgDailyInstalls: g.avgDailyInstalls,
+      subscriptionPrice: null,
     }));
-  }, [dashboard?.geoBreakdown]);
+  }, [dashboard?.geoBreakdown, dashboard?.activeCountry, dashboard?.kpis, dashboard?.funnel]);
 
   useEffect(() => {
     const token = getToken();

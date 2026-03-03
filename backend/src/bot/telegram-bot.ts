@@ -78,6 +78,12 @@ function parseApphudMessage(text: string): ParsedEvent | null {
     eventType = "refund";
   } else if (eventText.includes("billing issue")) {
     eventType = "billing_issue";
+  } else if (
+    eventText.includes("non renewing") ||
+    eventText.includes("non-renewing") ||
+    eventText.includes("purchase")
+  ) {
+    eventType = "purchase";
   }
 
   if (!eventType) return null;
@@ -107,7 +113,7 @@ function parseApphudMessage(text: string): ParsedEvent | null {
 }
 
 interface ParsedEvent {
-  type: "trial" | "sub" | "cancel" | "renew" | "refund" | "billing_issue";
+  type: "trial" | "sub" | "cancel" | "renew" | "refund" | "billing_issue" | "purchase";
   country: string;
   price: number;
 }
@@ -121,7 +127,7 @@ async function recordEvent(appId: string, event: ParsedEvent, date: Date): Promi
   const deltaTrials    = event.type === "trial" ? 1 : 0;
   const deltaSubs      = event.type === "sub" ? 1 : 0;
   const deltaCancels   = event.type === "cancel" ? 1 : 0;
-  const deltaRevenue   = (event.type === "sub" || event.type === "renew") ? event.price : 0;
+  const deltaRevenue   = (event.type === "sub" || event.type === "renew" || event.type === "purchase") ? event.price : 0;
   const deltaRefunds   = event.type === "refund" ? event.price : 0;
   const deltaNetGrowth = deltaSubs - deltaCancels;
 
@@ -159,6 +165,7 @@ const EVENT_EMOJI: Record<ParsedEvent["type"], string> = {
   renew: "🔄",
   refund: "💸",
   billing_issue: "⚠️",
+  purchase: "🛒",
 };
 
 const EVENT_LABEL: Record<ParsedEvent["type"], string> = {
@@ -168,6 +175,7 @@ const EVENT_LABEL: Record<ParsedEvent["type"], string> = {
   renew: "Renewal",
   refund: "Refund",
   billing_issue: "Billing issue",
+  purchase: "Purchase",
 };
 
 function eventReply(event: ParsedEvent): string {

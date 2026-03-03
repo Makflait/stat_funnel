@@ -26,6 +26,8 @@ export interface PredictLiveData {
   crTrialToSub: number | null;
   /** Average daily installs from the current selected period */
   avgDailyInstalls: number;
+  /** Average subscription price derived from revenue / new subs (Apphud geo mode) */
+  subscriptionPrice?: number | null;
 }
 
 interface PredictInputs {
@@ -392,13 +394,21 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
   // Pre-fill from real data when GEO changes or data first arrives
   useEffect(() => {
     if (!liveData) return;
-    const key = `${selectedGeo}:${liveData.avgDailyInstalls}:${liveData.crPaywallToTrial}:${liveData.crTrialToSub}`;
+    const key = `${selectedGeo}:${liveData.avgDailyInstalls}:${liveData.crPaywallToTrial}:${liveData.crTrialToSub}:${liveData.subscriptionPrice ?? ""}`;
     if (liveAppliedKey === key) return;
     setInputs((prev) => {
       const next = { ...prev };
       if (liveData.avgDailyInstalls > 0) next.installsPerMonth = Math.round(liveData.avgDailyInstalls * 30);
       if (liveData.crPaywallToTrial != null) next.paywallCR = Math.round(liveData.crPaywallToTrial * 10) / 10;
       if (liveData.crTrialToSub != null) next.trialToSubCR = Math.round(liveData.crTrialToSub * 10) / 10;
+      // Auto-fill subscription price and detect billing period from price magnitude
+      if (liveData.subscriptionPrice != null && liveData.subscriptionPrice > 0) {
+        next.subscriptionPrice = Math.round(liveData.subscriptionPrice * 100) / 100;
+        // Heuristic: weekly ≤ $8, 3-month ≤ $25, annual > $25
+        if (liveData.subscriptionPrice <= 8) next.subscriptionType = "week";
+        else if (liveData.subscriptionPrice <= 25) next.subscriptionType = "3months";
+        else next.subscriptionType = "year";
+      }
       return next;
     });
     setLiveAppliedKey(key);
