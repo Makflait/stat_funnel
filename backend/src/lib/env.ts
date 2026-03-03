@@ -18,4 +18,7 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
   encryptionKey: getEnv("ENCRYPTION_KEY"),
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+  telegramAllowedChatId: process.env.TELEGRAM_ALLOWED_CHAT_ID,
+  telegramAppId: process.env.TELEGRAM_APP_ID,
 };
