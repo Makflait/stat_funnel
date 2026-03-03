@@ -276,20 +276,24 @@ export function createTelegramBot(): Bot | null {
     await ctx.reply(eventReply(event));
   });
 
-  // ── Auto-parse Apphud messages ─────────────────────────────────────────────
+  // ── Auto-parse Apphud messages (group — human-forwarded only) ──────────────
   bot.on("message:text", async (ctx) => {
     if (!isAllowed(ctx)) return;
 
     const from = ctx.from?.username ?? "";
     const text = ctx.message.text;
 
-    // Only parse messages from @ApphudBot or forwarded from it
-    const isApphudBot =
-      from.toLowerCase() === "apphudbot" ||
+    // Only parse messages forwarded from @ApphudBot by a human
+    // Note: bots cannot receive messages sent directly by other bots in groups.
+    // Direct @ApphudBot posts in a group will be invisible to us.
+    // Use a Telegram channel (channel_post handler below) for auto-parsing.
+    const isForwardedFromApphud =
       (ctx.message.forward_origin as { sender_user?: { username?: string } } | undefined)
         ?.sender_user?.username?.toLowerCase() === "apphudbot";
 
-    if (!isApphudBot) return;
+    const isSentByApphud = from.toLowerCase() === "apphudbot"; // only works in channels
+
+    if (!isForwardedFromApphud && !isSentByApphud) return;
 
     const event = parseApphudMessage(text);
     if (!event) {
@@ -303,9 +307,29 @@ export function createTelegramBot(): Bot | null {
 
     await recordEvent(appId, event, msgDate);
     console.log(`[telegram] Apphud event recorded: ${event.type} ${event.country} $${event.price}`);
-
-    // Silent acknowledgement (no reply spam for auto-parsed messages)
     await ctx.react("👍").catch(() => {});
+  });
+
+  // ── Auto-parse Apphud messages (channel — preferred method) ────────────────
+  // When our bot is a channel admin, it receives all posts as channel_post events,
+  // including posts from other bots (@ApphudBot). This is the correct setup.
+  bot.on("channel_post:text", async (ctx) => {
+    if (!isAllowed(ctx)) return;
+
+    const text = ctx.channelPost.text;
+
+    // Log all channel posts for debugging
+    console.log(`[telegram] Channel post received: ${text.slice(0, 100)}`);
+
+    const event = parseApphudMessage(text);
+    if (!event) return; // Not an Apphud event — skip silently
+
+    const msgDate = ctx.channelPost.date
+      ? new Date(ctx.channelPost.date * 1000)
+      : new Date();
+
+    await recordEvent(appId, event, msgDate);
+    console.log(`[telegram] Channel Apphud event recorded: ${event.type} ${event.country} $${event.price}`);
   });
 
   bot.catch((err) => {
