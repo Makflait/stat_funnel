@@ -6,59 +6,102 @@ import { env } from "../lib/env.js";
 // ─── Apphud message parser ────────────────────────────────────────────────────
 
 /**
- * Maps Apphud Telegram notification text to an event type.
- * Apphud messages are in English, contain event name and user details.
- * We match case-insensitively on key phrases.
+ * Full country name → ISO alpha-2 mapping for Apphud "Store Country" field.
+ */
+const COUNTRY_NAME_TO_ISO: Record<string, string> = {
+  "United States": "US", "United Kingdom": "GB", "Germany": "DE",
+  "France": "FR", "Italy": "IT", "Spain": "ES", "Russia": "RU",
+  "Canada": "CA", "Australia": "AU", "Japan": "JP", "China": "CN",
+  "Brazil": "BR", "Mexico": "MX", "India": "IN", "South Korea": "KR",
+  "Netherlands": "NL", "Sweden": "SE", "Norway": "NO", "Denmark": "DK",
+  "Finland": "FI", "Poland": "PL", "Turkey": "TR", "Ukraine": "UA",
+  "Switzerland": "CH", "Austria": "AT", "Belgium": "BE", "Portugal": "PT",
+  "Czech Republic": "CZ", "Romania": "RO", "Hungary": "HU", "Greece": "GR",
+  "Israel": "IL", "Saudi Arabia": "SA", "United Arab Emirates": "AE",
+  "UAE": "AE", "South Africa": "ZA", "New Zealand": "NZ", "Singapore": "SG",
+  "Hong Kong": "HK", "Taiwan": "TW", "Thailand": "TH", "Indonesia": "ID",
+  "Malaysia": "MY", "Philippines": "PH", "Vietnam": "VN", "Argentina": "AR",
+  "Chile": "CL", "Colombia": "CO", "Peru": "PE", "Egypt": "EG",
+  "Nigeria": "NG", "Pakistan": "PK", "Kazakhstan": "KZ", "Azerbaijan": "AZ",
+  "Belarus": "BY", "Georgia": "GE", "Armenia": "AM", "Uzbekistan": "UZ",
+  "Slovakia": "SK", "Croatia": "HR", "Bulgaria": "BG", "Serbia": "RS",
+  "Lithuania": "LT", "Latvia": "LV", "Estonia": "EE", "Slovenia": "SI",
+  "Ireland": "IE", "Iceland": "IS", "Luxembourg": "LU", "Kenya": "KE",
+  "Bangladesh": "BD",
+};
+
+/**
+ * Parses Apphud Telegram notification messages.
+ *
+ * Real message format:
+ *   [AppName] Subscription Started
+ *   Premium
+ *   User ID: 519B24B2-...
+ *   Product ID: music_weekly
+ *   Store Country: United States
+ *   Revenue: 4.99 USD
  */
 function parseApphudMessage(text: string): ParsedEvent | null {
-  const t = text.toLowerCase();
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
 
-  // Determine event type
+  // First line: "[AppName] Event Type"
+  const firstLine = lines[0];
+  const headerMatch = firstLine.match(/^\[.+\]\s+(.+)$/);
+  if (!headerMatch) return null;
+
+  const eventText = headerMatch[1].toLowerCase();
+
   let eventType: ParsedEvent["type"] | null = null;
-
-  if (t.includes("trial started") || t.includes("trial_started")) {
+  if (eventText.includes("trial started") || eventText.includes("trial active")) {
     eventType = "trial";
   } else if (
-    t.includes("subscription started") || t.includes("subscription_started") ||
-    t.includes("trial converted") || t.includes("trial_converted") ||
-    t.includes("intro started") || t.includes("intro_started")
+    eventText.includes("subscription started") ||
+    eventText.includes("trial converted") ||
+    eventText.includes("intro started")
   ) {
     eventType = "sub";
   } else if (
-    t.includes("subscription canceled") || t.includes("subscription cancelled") ||
-    t.includes("subscription_canceled") || t.includes("autorenew disabled") ||
-    t.includes("trial canceled") || t.includes("trial cancelled")
+    eventText.includes("subscription canceled") ||
+    eventText.includes("subscription cancelled") ||
+    eventText.includes("trial canceled") ||
+    eventText.includes("trial cancelled") ||
+    eventText.includes("autorenew disabled")
   ) {
     eventType = "cancel";
   } else if (
-    t.includes("subscription renewed") || t.includes("subscription_renewed") ||
-    t.includes("intro renewed") || t.includes("non_renewing")
+    eventText.includes("subscription renewed") ||
+    eventText.includes("intro renewed")
   ) {
     eventType = "renew";
-  } else if (
-    t.includes("refund") || t.includes("subscription_refunded")
-  ) {
+  } else if (eventText.includes("refund")) {
     eventType = "refund";
-  } else if (t.includes("billing issue") || t.includes("billing_issue")) {
+  } else if (eventText.includes("billing issue")) {
     eventType = "billing_issue";
   }
 
   if (!eventType) return null;
 
-  // Extract country (ISO alpha-2 code)
-  // Apphud usually includes country in the message
-  const countryMatch =
-    text.match(/\b([A-Z]{2})\b/) ??          // standalone 2-letter code
-    text.match(/country[:\s]+([A-Z]{2})/i) ?? // "Country: US"
-    text.match(/🏳️|🌍|country_iso[:\s]+([A-Z]{2})/i);
-  const country = (countryMatch?.[1] ?? "XX").toUpperCase();
+  // Parse "Store Country: United States" → ISO code
+  let country = "XX";
+  for (const line of lines) {
+    const m = line.match(/^Store Country:\s*(.+)$/i);
+    if (m) {
+      const name = m[1].trim();
+      country = COUNTRY_NAME_TO_ISO[name] ?? name.slice(0, 2).toUpperCase();
+      break;
+    }
+  }
 
-  // Extract price (USD)
-  const priceMatch =
-    text.match(/\$(\d+(?:\.\d+)?)/) ??       // $9.99
-    text.match(/(\d+(?:\.\d+)?)\s*usd/i) ??  // 9.99 USD
-    text.match(/price[:\s]+(\d+(?:\.\d+)?)/i);
-  const price = priceMatch ? Number(priceMatch[1]) : 0;
+  // Parse "Revenue: 4.99 USD"
+  let price = 0;
+  for (const line of lines) {
+    const m = line.match(/^Revenue:\s*([\d.]+)\s*USD/i);
+    if (m) {
+      price = Number(m[1]);
+      break;
+    }
+  }
 
   return { type: eventType, country, price };
 }
