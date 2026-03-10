@@ -57,6 +57,7 @@ export interface AppsFlyerAttributionRow {
   date: string;        // YYYY-MM-DD
   mediaSource: string; // "Apple Search Ads", "googleadwords_int", "Organic", etc.
   campaign: string;    // campaign name (empty string for organic/unknown)
+  country: string;     // ISO alpha-2 country code (empty string = all/unknown)
   installs: number;
   trials: number;
   subscriptions: number;

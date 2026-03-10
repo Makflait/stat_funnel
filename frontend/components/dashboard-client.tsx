@@ -1248,7 +1248,7 @@ export default function DashboardClient() {
             ║       ATTRIBUTION        ║
             ╚══════════════════════════╝ */}
         {selectedAppId && (
-          <AttributionSection appId={selectedAppId} from={range.from} to={range.to} />
+          <AttributionSection appId={selectedAppId} from={range.from} to={range.to} country={selectedCountry || undefined} />
         )}
 
         {/* ╔══════════════════════════╗

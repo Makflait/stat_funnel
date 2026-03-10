@@ -206,11 +206,12 @@ export async function syncApp(appId: string, from: Date, to: Date): Promise<Sync
         const rowDate = new Date(row.date + "T00:00:00.000Z");
         await prisma.campaignReport.upsert({
           where: {
-            appId_date_mediaSource_campaign: {
+            appId_date_mediaSource_campaign_country: {
               appId,
               date: rowDate,
               mediaSource: row.mediaSource,
               campaign: row.campaign,
+              country: row.country,
             },
           },
           create: {
@@ -218,6 +219,7 @@ export async function syncApp(appId: string, from: Date, to: Date): Promise<Sync
             date: rowDate,
             mediaSource: row.mediaSource,
             campaign: row.campaign,
+            country: row.country,
             installs: row.installs,
             trials: row.trials,
             subscriptions: row.subscriptions,

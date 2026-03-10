@@ -154,13 +154,15 @@ model CampaignReport {
   date          DateTime
   mediaSource   String
   campaign      String   @default("")
+  country       String   @default("")
   installs      Int      @default(0)
   trials        Int      @default(0)
   subscriptions Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@unique([appId, date, mediaSource, campaign])
+  @@unique([appId, date, mediaSource, campaign, country])
   @@index([appId, date])
   @@index([appId, mediaSource])
+  @@index([appId, country])
 }

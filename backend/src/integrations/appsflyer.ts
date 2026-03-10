@@ -127,12 +127,12 @@ export async function fetchAppsFlyerAttribution(
 
   const base = `${APPSFLYER_API_BASE}/${credentials.appId}`;
 
-  // Map keyed by "date\0mediaSource\0campaign"
+  // Map keyed by "date\0mediaSource\0campaign\0country"
   const merged = new Map<string, { installs: number; trials: number; subscriptions: number }>();
 
-  function mergeInstalls(tuples: Array<[string, string, string, number]>) {
-    for (const [date, mediaSource, campaign, count] of tuples) {
-      const key = `${date}\0${mediaSource}\0${campaign}`;
+  function mergeInstalls(tuples: Array<[string, string, string, string, number]>) {
+    for (const [date, mediaSource, campaign, country, count] of tuples) {
+      const key = `${date}\0${mediaSource}\0${campaign}\0${country}`;
       const existing = merged.get(key) ?? { installs: 0, trials: 0, subscriptions: 0 };
       existing.installs += count;
       merged.set(key, existing);
@@ -140,11 +140,11 @@ export async function fetchAppsFlyerAttribution(
   }
 
   function mergeEvents(
-    tuples: Array<[string, string, string, number]>,
+    tuples: Array<[string, string, string, string, number]>,
     field: "trials" | "subscriptions",
   ) {
-    for (const [date, mediaSource, campaign, count] of tuples) {
-      const key = `${date}\0${mediaSource}\0${campaign}`;
+    for (const [date, mediaSource, campaign, country, count] of tuples) {
+      const key = `${date}\0${mediaSource}\0${campaign}\0${country}`;
       const existing = merged.get(key) ?? { installs: 0, trials: 0, subscriptions: 0 };
       existing[field] += count;
       merged.set(key, existing);
@@ -208,22 +208,22 @@ export async function fetchAppsFlyerAttribution(
   return Array.from(merged.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, counts]) => {
-      const [date, mediaSource, campaign] = key.split("\0");
-      return { date, mediaSource, campaign, ...counts };
+      const [date, mediaSource, campaign, country] = key.split("\0");
+      return { date, mediaSource, campaign, country, ...counts };
     });
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
- * Fetch one AppsFlyer raw-data endpoint and group rows by (date, mediaSource, campaign).
- * Returns array of [date, mediaSource, campaign, count] tuples.
+ * Fetch one AppsFlyer raw-data endpoint and group rows by (date, mediaSource, campaign, country).
+ * Returns array of [date, mediaSource, campaign, country, count] tuples.
  */
 async function fetchAndGroupBySource(
   url: string,
   token: string,
   timeColHint: string,
-): Promise<Array<[string, string, string, number]>> {
+): Promise<Array<[string, string, string, string, number]>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -259,6 +259,7 @@ async function fetchAndGroupBySource(
 
   const sourceIdx = headers.indexOf("media source");
   const campaignIdx = headers.indexOf("campaign");
+  const countryIdx = headers.indexOf("country code");
 
   if (timeIdx === -1) {
     console.warn(`[appsflyer-attr] CSV missing time column. Headers: ${headers.slice(0, 10).join(", ")}`);
@@ -275,14 +276,15 @@ async function fetchAndGroupBySource(
 
     const mediaSource = sourceIdx !== -1 ? (cols[sourceIdx]?.trim() ?? "Organic") : "Organic";
     const campaign = campaignIdx !== -1 ? (cols[campaignIdx]?.trim() ?? "") : "";
+    const country = countryIdx !== -1 ? (cols[countryIdx]?.trim().toUpperCase() ?? "") : "";
 
-    const key = `${date}\0${mediaSource}\0${campaign}`;
+    const key = `${date}\0${mediaSource}\0${campaign}\0${country}`;
     grouped.set(key, (grouped.get(key) ?? 0) + 1);
   }
 
   return Array.from(grouped.entries()).map(([key, count]) => {
-    const [date, mediaSource, campaign] = key.split("\0");
-    return [date, mediaSource, campaign, count];
+    const [date, mediaSource, campaign, country] = key.split("\0");
+    return [date, mediaSource, campaign, country, count];
   });
 }
 

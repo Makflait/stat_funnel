@@ -9,6 +9,7 @@ interface AttributionSectionProps {
   appId: string;
   from: string;
   to: string;
+  country?: string;
 }
 
 function fmt(value: number | null, type: "number" | "currency" | "percent"): string {
@@ -18,7 +19,7 @@ function fmt(value: number | null, type: "number" | "currency" | "percent"): str
   return formatNumber(value);
 }
 
-export default function AttributionSection({ appId, from, to }: AttributionSectionProps) {
+export default function AttributionSection({ appId, from, to, country }: AttributionSectionProps) {
   const [rows, setRows] = useState<AttributionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,13 +29,14 @@ export default function AttributionSection({ appId, from, to }: AttributionSecti
     if (!appId) return;
     setLoading(true);
     setError(null);
+    const countryParam = country ? `&country=${encodeURIComponent(country)}` : "";
     apiRequest<{ rows: AttributionRow[] }>(
-      `/attribution?appId=${encodeURIComponent(appId)}&from=${from}&to=${to}`,
+      `/attribution?appId=${encodeURIComponent(appId)}&from=${from}&to=${to}${countryParam}`,
     )
       .then((data) => setRows(data.rows))
       .catch((err) => setError(err instanceof Error ? err.message : "Ошибка загрузки"))
       .finally(() => setLoading(false));
-  }, [appId, from, to]);
+  }, [appId, from, to, country]);
 
   // Group rows by mediaSource, aggregate totals per source
   const grouped = useMemo(() => {
@@ -106,7 +108,14 @@ export default function AttributionSection({ appId, from, to }: AttributionSecti
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border/55 px-5 py-4 sm:px-6">
         <div>
-          <h2 className="text-lg font-semibold">Атрибуция по источникам</h2>
+          <h2 className="text-lg font-semibold">
+            Атрибуция по источникам
+            {country && (
+              <span className="ml-2 rounded-lg bg-accent/15 px-2 py-0.5 text-sm font-medium text-accentSoft">
+                {country}
+              </span>
+            )}
+          </h2>
           <p className="mt-0.5 text-sm text-muted">
             {loading
               ? "Загрузка..."

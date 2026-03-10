@@ -119,7 +119,17 @@ function parseApphudMessage(text: string): ParsedEvent | null {
     }
   }
 
-  return { type: eventType, country, price, apphudUserId };
+  // Parse "Product ID: music_weekly" to identify subscription type
+  let productId: string | undefined;
+  for (const line of lines) {
+    const m = line.match(/^Product\s*ID:\s*(.+)$/i);
+    if (m) {
+      productId = m[1].trim();
+      break;
+    }
+  }
+
+  return { type: eventType, country, price, apphudUserId, productId };
 }
 
 interface ParsedEvent {
@@ -127,6 +137,7 @@ interface ParsedEvent {
   country: string;
   price: number;
   apphudUserId?: string;
+  productId?: string;
 }
 
 // ─── DB writer ────────────────────────────────────────────────────────────────
@@ -141,8 +152,11 @@ async function recordEvent(
   date: Date,
   messageId: string,
 ): Promise<boolean> {
+  const dec = (n: number) => new Prisma.Decimal(n);
+  const dateOnly = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+
   // ── Deduplication ────────────────────────────────────────────────────────
-  // Skip if we have already processed this Telegram message.
+  // Primary: skip if we have already processed this exact Telegram message.
   const alreadySeen = await prisma.telegramEventLog.findUnique({
     where: { appId_messageId: { appId, messageId } },
     select: { id: true },
@@ -152,8 +166,25 @@ async function recordEvent(
     return false;
   }
 
-  const dec = (n: number) => new Prisma.Decimal(n);
-  const dateOnly = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // Secondary: for non-renewal events, check if same (userId, eventType) already
+  // recorded for this date. Protects against Apphud retry — same event fired twice
+  // creates two different Telegram messages with different message_ids.
+  if (event.apphudUserId && event.type !== "renew") {
+    const dayEnd = new Date(dateOnly.getTime() + 24 * 60 * 60 * 1000);
+    const duplicateEvent = await prisma.telegramEventLog.findFirst({
+      where: {
+        appId,
+        apphudUserId: event.apphudUserId,
+        eventType: event.type,
+        createdAt: { gte: dateOnly, lt: dayEnd },
+      },
+      select: { id: true },
+    });
+    if (duplicateEvent) {
+      console.log(`[telegram] Duplicate event skipped (userId+type): ${event.type} userId=${event.apphudUserId}`);
+      return false;
+    }
+  }
 
   const deltaTrials    = event.type === "trial" ? 1 : 0;
   const deltaSubs      = event.type === "sub" ? 1 : 0;
@@ -442,7 +473,7 @@ export function createTelegramBot(): Bot | null {
     const msgId = `ch-${ctx.channelPost.message_id}`;
     const recorded = await recordEvent(appId, event, msgDate, msgId);
     if (recorded) {
-      console.log(`[telegram] Channel event recorded: ${event.type} ${event.country} $${event.price} (apphudUser=${event.apphudUserId ?? "?"})`);
+      console.log(`[telegram] Channel event recorded: ${event.type} ${event.country} $${event.price} product=${event.productId ?? "?"} apphudUser=${event.apphudUserId ?? "?"}`);
     }
   });
 

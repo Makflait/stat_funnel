@@ -15,6 +15,7 @@ router.get("/", async (req, res, next) => {
       appId: z.string().min(1),
       from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      country: z.string().length(2).toUpperCase().optional(),
     }).parse(req.query);
 
     const app = await prisma.app.findFirst({ where: { id: query.appId, ownerId: req.user!.id } });
@@ -25,9 +26,13 @@ router.get("/", async (req, res, next) => {
     const fromDate = query.from ? toDateOnlyUtc(query.from) : new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
     const toDate = query.to ? toDateOnlyUtc(query.to) : today;
 
-    // Fetch campaign reports
+    // Fetch campaign reports, optionally filtered by country
     const rows = await prisma.campaignReport.findMany({
-      where: { appId: query.appId, date: { gte: fromDate, lte: toDate } },
+      where: {
+        appId: query.appId,
+        date: { gte: fromDate, lte: toDate },
+        ...(query.country ? { country: query.country } : {}),
+      },
       orderBy: [{ mediaSource: "asc" }, { campaign: "asc" }, { date: "asc" }],
     });
 
@@ -63,9 +68,7 @@ router.get("/", async (req, res, next) => {
       aggMap.set(key, existing);
     }
 
-    // Add spend — exact match: AdSpendDaily.source must equal CampaignReport.mediaSource
-    // and campaign must match exactly. Users must enter spend using the exact source name
-    // that appears in AppsFlyer data (e.g. "Apple Search Ads", "googleadwords_int").
+    // Add spend — exact match by source+campaign
     for (const s of spends) {
       const key = `${s.source}\0${s.campaign ?? ""}`;
       if (aggMap.has(key)) {
@@ -88,7 +91,7 @@ router.get("/", async (req, res, next) => {
       costPerPaidTrial: agg.subscriptions > 0 && agg.spend > 0 ? agg.spend / agg.subscriptions : null,
     }));
 
-    return res.status(200).json({ rows: result });
+    return res.status(200).json({ rows: result, country: query.country ?? null });
   } catch (error) {
     return next(error);
   }
