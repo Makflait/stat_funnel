@@ -90,7 +90,7 @@ interface ApphudWebhookPayload {
  *   Integration settings as webhookSecret
  */
 // Raw body parser that fixes Apphud Connection Builder test payloads with unquoted liquid tags
-router.use(express.text({ type: "application/json" }));
+router.use(express.text({ type: "*/*" }));
 router.use((req, _res, next) => {
   if (typeof req.body === "string") {
     try {

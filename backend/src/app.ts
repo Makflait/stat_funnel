@@ -19,6 +19,10 @@ app.use(
     credentials: true,
   })
 );
+// Webhook routes registered BEFORE express.json() so they handle their own body parsing
+app.use("/api/webhook", webhookRoutes);
+app.use("/webhook", webhookRoutes);
+
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
@@ -31,9 +35,7 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/attribution", attributionRoutes);
 app.use("/api/integrations", integrationsRoutes);
-app.use("/api/webhook", webhookRoutes);
 app.use("/api", syncRoutes);
-app.use("/webhook", webhookRoutes);
 
 app.use(errorHandler);
 
