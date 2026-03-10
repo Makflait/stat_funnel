@@ -31,9 +31,9 @@ app.use("/api/reports", reportsRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/attribution", attributionRoutes);
 app.use("/api/integrations", integrationsRoutes);
+app.use("/api/webhook", webhookRoutes);
 app.use("/api", syncRoutes);
 app.use("/webhook", webhookRoutes);
-app.use("/api/webhook", webhookRoutes);
 
 app.use(errorHandler);
 
