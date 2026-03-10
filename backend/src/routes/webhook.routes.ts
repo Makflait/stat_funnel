@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnlyUtc } from "../utils/date.js";
@@ -89,6 +89,24 @@ interface ApphudWebhookPayload {
  *   Secret token (optional): any random string → set same value in
  *   Integration settings as webhookSecret
  */
+// Raw body parser that fixes Apphud Connection Builder test payloads with unquoted liquid tags
+router.use(express.text({ type: "application/json" }));
+router.use((req, _res, next) => {
+  if (typeof req.body === "string") {
+    try {
+      // Replace bare unquoted empty/null liquid values like: "key": , or "key":  }
+      const cleaned = req.body
+        .replace(/:\s*,/g, ": 0,")
+        .replace(/:\s*}/g, ": 0}")
+        .replace(/:\s*\n/g, ": 0\n");
+      req.body = JSON.parse(cleaned);
+    } catch {
+      req.body = {};
+    }
+  }
+  next();
+});
+
 router.post("/apphud/:appId", async (req, res, next) => {
   try {
     const { appId } = req.params;
