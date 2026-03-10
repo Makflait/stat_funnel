@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { decrypt } from "../lib/crypto.js";
 import { fetchApphudGeoMetrics, fetchApphudMetrics } from "../integrations/apphud.js";
-import { fetchAppsFlyerMetrics } from "../integrations/appsflyer.js";
+import { fetchAppsFlyerAttribution, fetchAppsFlyerMetrics } from "../integrations/appsflyer.js";
 import type {
   ApphudCredentials,
   AppsFlyerCredentials,
@@ -75,13 +75,14 @@ export async function syncApp(appId: string, from: Date, to: Date): Promise<Sync
     string,
     Awaited<ReturnType<typeof fetchAppsFlyerMetrics>>[number]
   >();
+  // Decrypt AppsFlyer credentials once, reuse for both metrics and attribution fetches
+  let afCreds: AppsFlyerCredentials | null = null;
+  let afSettings: IntegrationSettings = {};
   if (appsflyerInt) {
+    afCreds = JSON.parse(decrypt(appsflyerInt.credentialsEncrypted)) as AppsFlyerCredentials;
+    afSettings = (appsflyerInt.settings as IntegrationSettings) ?? {};
     try {
-      const creds = JSON.parse(
-        decrypt(appsflyerInt.credentialsEncrypted),
-      ) as AppsFlyerCredentials;
-      const settings = (appsflyerInt.settings as IntegrationSettings) ?? {};
-      const rows = await fetchAppsFlyerMetrics(creds, settings, from, to);
+      const rows = await fetchAppsFlyerMetrics(afCreds, afSettings, from, to);
       appsflyerByDate = new Map(rows.map((r) => [r.date, r]));
     } catch (err) {
       const msg = `AppsFlyer fetch failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -192,6 +193,45 @@ export async function syncApp(appId: string, from: Date, to: Date): Promise<Sync
       result.updatedCount++;
     } catch (err) {
       const msg = `Day ${dateStr} failed: ${err instanceof Error ? err.message : String(err)}`;
+      result.errors.push(msg);
+      console.error(`[sync] ${appId} — ${msg}`);
+    }
+  }
+
+  // ── Attribution sync: installs + events by source/campaign ─────────────────
+  if (appsflyerInt && afCreds) {
+    try {
+      const attrRows = await fetchAppsFlyerAttribution(afCreds, afSettings, from, to);
+      for (const row of attrRows) {
+        const rowDate = new Date(row.date + "T00:00:00.000Z");
+        await prisma.campaignReport.upsert({
+          where: {
+            appId_date_mediaSource_campaign: {
+              appId,
+              date: rowDate,
+              mediaSource: row.mediaSource,
+              campaign: row.campaign,
+            },
+          },
+          create: {
+            appId,
+            date: rowDate,
+            mediaSource: row.mediaSource,
+            campaign: row.campaign,
+            installs: row.installs,
+            trials: row.trials,
+            subscriptions: row.subscriptions,
+          },
+          update: {
+            installs: row.installs,
+            trials: row.trials,
+            subscriptions: row.subscriptions,
+          },
+        });
+      }
+      console.log(`[sync] app=${appId} attribution rows: ${attrRows.length}`);
+    } catch (err) {
+      const msg = `AppsFlyer attribution sync failed: ${err instanceof Error ? err.message : String(err)}`;
       result.errors.push(msg);
       console.error(`[sync] ${appId} — ${msg}`);
     }

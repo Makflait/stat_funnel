@@ -96,5 +96,28 @@ export interface AdSpendRow {
   id: string;
   date: string;
   source: string;
+  campaign: string;
+  spend: number;
+}
+
+export interface AttributionRow {
+  mediaSource: string;
+  campaign: string;
+  installs: number;
+  trials: number;
+  subscriptions: number;
+  spend: number;
+  crInstallToTrial: number | null;
+  crTrialToSub: number | null;
+  cpi: number | null;
+  costPerTrial: number | null;
+  costPerPaidTrial: number | null;
+}
+
+export interface SpendRow {
+  id: string;
+  date: string;
+  source: string;
+  campaign: string;
   spend: number;
 }

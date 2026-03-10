@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { clearToken, getToken } from "../lib/auth";
-import type { AppItem, Integration, IntegrationType, SyncResult } from "../lib/types";
+import type { AppItem, Integration, IntegrationType, SpendRow, SyncResult } from "../lib/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -15,21 +15,6 @@ function yesterdayIso() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return d.toISOString().slice(0, 10);
-}
-
-function parseSpendCsv(raw: string): Array<{ date: string; spend: number }> | null {
-  const lines = raw.trim().split(/\r?\n/).filter((l) => l.trim());
-  const rows: Array<{ date: string; spend: number }> = [];
-  for (const line of lines) {
-    const parts = line.split(",").map((p) => p.trim());
-    if (parts.length < 2) return null;
-    const [date, spendRaw] = parts;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-    const spend = parseFloat(spendRaw);
-    if (!isFinite(spend) || spend < 0) return null;
-    rows.push({ date, spend });
-  }
-  return rows.length > 0 ? rows : null;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -84,7 +69,7 @@ interface IntegrationFormProps {
   onSaved: () => void;
 }
 
-const FIELD_DEFS: Record<IntegrationType, Array<{ key: string; label: string; placeholder: string; isOptional?: boolean }>> = {
+const FIELD_DEFS: Record<IntegrationType, Array<{ key: string; label: string; placeholder: string; isOptional?: boolean; isSettings?: boolean; isText?: boolean }>> = {
   APPHUD: [
     { key: "apiKey", label: "API Key (необязательно)", placeholder: "app_...", isOptional: true },
     { key: "projectId", label: "Project ID (необязательно)", placeholder: "proj_...", isOptional: true },
@@ -93,6 +78,9 @@ const FIELD_DEFS: Record<IntegrationType, Array<{ key: string; label: string; pl
   APPSFLYER: [
     { key: "apiToken", label: "API Token", placeholder: "af_..." },
     { key: "appId", label: "App ID (AppsFlyer)", placeholder: "id123456789" },
+    { key: "paywallEventName", label: "Paywall Event Name (опционально)", placeholder: "paywall_shown", isOptional: true, isSettings: true, isText: true },
+    { key: "trialEventName", label: "Trial Event Name (опционально)", placeholder: "af_start_trial", isOptional: true, isSettings: true, isText: true },
+    { key: "subscriptionEventName", label: "Subscription Event Name (опционально)", placeholder: "af_subscribe", isOptional: true, isSettings: true, isText: true },
   ],
 };
 
@@ -110,11 +98,10 @@ function IntegrationForm({ appId, type, existing, onSaved }: IntegrationFormProp
 
     const fd = new FormData(e.currentTarget);
     const credentials: Record<string, string> = {};
-    const SETTINGS_KEYS = new Set(["webhookSecret"]);
     const settings: Record<string, string> = {};
     for (const f of fields) {
       const val = String(fd.get(f.key) ?? "").trim();
-      if (SETTINGS_KEYS.has(f.key)) {
+      if (f.isSettings) {
         if (val) settings[f.key] = val;
       } else {
         credentials[f.key] = val;
@@ -150,9 +137,9 @@ function IntegrationForm({ appId, type, existing, onSaved }: IntegrationFormProp
             <span className="mb-1 block text-xs font-medium text-muted">{f.label}</span>
             <input
               name={f.key}
-              type="password"
+              type={f.isText ? "text" : "password"}
               required={!f.isOptional}
-              placeholder={existing ? "••••••••" : f.placeholder}
+              placeholder={f.isText ? f.placeholder : (existing ? "••••••••" : f.placeholder)}
               className="input-field py-2 text-sm font-mono"
             />
           </label>
@@ -279,85 +266,196 @@ function SyncPanel({ appId }: SyncPanelProps) {
   );
 }
 
-// ─── Ad Spend import ──────────────────────────────────────────────────────────
+// ─── Ad Spend management ──────────────────────────────────────────────────────
 
-interface AdSpendImportProps {
+interface AdSpendManagerProps {
   appId: string;
 }
 
-function AdSpendImport({ appId }: AdSpendImportProps) {
-  const [source, setSource] = useState("google");
-  const [csv, setCsv] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+function AdSpendManager({ appId }: AdSpendManagerProps) {
+  const [date, setDate] = useState(yesterdayIso);
+  const [source, setSource] = useState("");
+  const [campaign, setCampaign] = useState("");
+  const [spend, setSpend] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveResult, setSaveResult] = useState<string | null>(null);
+  const [rows, setRows] = useState<SpendRow[]>([]);
+  const [loadingRows, setLoadingRows] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  async function importSpend() {
-    setError(null);
-    setResult(null);
-    const rows = parseSpendCsv(csv);
-    if (!rows) {
-      setError("Неверный формат CSV. Ожидается: date,spend (строка на день, дата YYYY-MM-DD)");
+  const loadRows = useCallback(async () => {
+    if (!appId) return;
+    setLoadingRows(true);
+    try {
+      const data = await apiRequest<{ rows: SpendRow[] }>(`/attribution/spend?appId=${appId}`);
+      setRows(data.rows);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoadingRows(false);
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    loadRows();
+  }, [loadRows]);
+
+  async function saveSpend() {
+    setSaveError(null);
+    setSaveResult(null);
+    const spendNum = parseFloat(spend);
+    if (!source.trim()) {
+      setSaveError("Укажите источник (точно как в AppsFlyer, например: googleadwords_int)");
       return;
     }
-    setLoading(true);
+    if (!isFinite(spendNum) || spendNum < 0) {
+      setSaveError("Неверная сумма расходов");
+      return;
+    }
+    setSaving(true);
     try {
-      const data = await apiRequest<{ message: string; upsertedCount: number }>("/adspend/import", {
+      await apiRequest("/attribution/spend", {
         method: "POST",
-        body: JSON.stringify({ appId, source, rows }),
+        body: JSON.stringify({
+          appId,
+          date,
+          source: source.trim(),
+          campaign: campaign.trim(),
+          spend: spendNum,
+        }),
       });
-      setResult(data.message);
-      setCsv("");
+      setSaveResult("Сохранено");
+      setSpend("");
+      await loadRows();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка импорта");
+      setSaveError(err instanceof Error ? err.message : "Ошибка сохранения");
     } finally {
-      setLoading(false);
+      setSaving(false);
+    }
+  }
+
+  async function deleteRow(id: string) {
+    if (!confirm("Удалить запись о расходах?")) return;
+    setDeletingId(id);
+    try {
+      await apiRequest(`/attribution/spend/${id}`, { method: "DELETE" });
+      await loadRows();
+    } catch {
+      // ignore
+    } finally {
+      setDeletingId(null);
     }
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-3">
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-muted">Источник</span>
-          <select
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            className="input-field py-2 text-sm"
-          >
-            <option value="google">Google Ads</option>
-            <option value="asa">Apple Search Ads</option>
-            <option value="meta">Meta</option>
-            <option value="tiktok">TikTok</option>
-            <option value="other">Другой</option>
-          </select>
-        </label>
+    <div className="space-y-4">
+      <div className="rounded-xl border border-border/50 bg-surface/40 p-4 space-y-3">
+        <p className="text-xs font-medium text-muted">Добавить запись</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-muted">Дата</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="input-field py-2 text-sm w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-muted">
+              Источник (точно как в AppsFlyer)
+            </span>
+            <input
+              type="text"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="Apple Search Ads"
+              className="input-field py-2 text-sm font-mono w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-muted">
+              Кампания (опционально, точно как в AppsFlyer)
+            </span>
+            <input
+              type="text"
+              value={campaign}
+              onChange={(e) => setCampaign(e.target.value)}
+              placeholder="название кампании"
+              className="input-field py-2 text-sm font-mono w-full"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-muted">Расход ($)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={spend}
+              onChange={(e) => setSpend(e.target.value)}
+              placeholder="0.00"
+              className="input-field py-2 text-sm font-mono w-full"
+            />
+          </label>
+        </div>
+
+        {saveError && <p className="text-xs text-dangerSoft">{saveError}</p>}
+        {saveResult && <p className="text-xs text-successSoft">{saveResult}</p>}
+
+        <button
+          type="button"
+          onClick={saveSpend}
+          disabled={saving}
+          className="btn btn-primary py-2 px-4 text-sm"
+        >
+          {saving ? "Сохранение..." : "Сохранить"}
+        </button>
       </div>
 
-      <label className="block">
-        <span className="mb-1 block text-xs font-medium text-muted">
-          CSV данные (одна строка = один день)
-        </span>
-        <textarea
-          value={csv}
-          onChange={(e) => setCsv(e.target.value)}
-          rows={6}
-          placeholder={"2024-01-01,150.00\n2024-01-02,200.50\n2024-01-03,175.25"}
-          className="input-field py-2 font-mono text-xs w-full resize-y"
-        />
-      </label>
-
-      {error && <p className="text-xs text-dangerSoft">{error}</p>}
-      {result && <p className="text-xs text-successSoft">{result}</p>}
-
-      <button
-        type="button"
-        onClick={importSpend}
-        disabled={loading || !csv.trim()}
-        className="btn btn-primary py-2 px-4 text-sm"
-      >
-        {loading ? "Импорт..." : "Импортировать"}
-      </button>
+      {/* Existing rows */}
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted">Загруженные расходы</p>
+        {loadingRows ? (
+          <p className="text-xs text-muted">Загрузка...</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs text-muted">Нет данных</p>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-border/50">
+            <table className="w-full min-w-[500px] border-collapse text-left text-xs">
+              <thead>
+                <tr className="border-b border-border/55 bg-panel/40">
+                  <th className="px-3 py-2 text-[10px] font-medium uppercase tracking-widest text-mutedDark">Дата</th>
+                  <th className="px-3 py-2 text-[10px] font-medium uppercase tracking-widest text-mutedDark">Источник</th>
+                  <th className="px-3 py-2 text-[10px] font-medium uppercase tracking-widest text-mutedDark">Кампания</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-widest text-mutedDark">Расход</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b border-border/30 hover:bg-white/[0.02]">
+                    <td className="px-3 py-2 font-mono text-muted">{r.date}</td>
+                    <td className="px-3 py-2 font-mono text-text">{r.source}</td>
+                    <td className="px-3 py-2 font-mono text-muted">{r.campaign || <span className="italic text-mutedDark">—</span>}</td>
+                    <td className="px-3 py-2 text-right font-mono text-text">${r.spend.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => deleteRow(r.id)}
+                        disabled={deletingId === r.id}
+                        className="btn btn-ghost py-0.5 px-2 text-[10px] text-dangerSoft"
+                      >
+                        {deletingId === r.id ? "..." : "Удалить"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -417,7 +515,7 @@ export default function SettingsClient() {
     { key: "apphud" as const, label: "Apphud", badge: <StatusBadge integration={apphudInt} /> },
     { key: "appsflyer" as const, label: "AppsFlyer", badge: <StatusBadge integration={appsflyerInt} /> },
     { key: "sync" as const, label: "Синхронизация", badge: null },
-    { key: "adspend" as const, label: "Ad Spend CSV", badge: null },
+    { key: "adspend" as const, label: "Ad Spend", badge: null },
   ];
 
   if (loadingApps) {
@@ -582,10 +680,8 @@ export default function SettingsClient() {
                   <div className="mb-4">
                     <h2 className="text-sm font-semibold text-text">AppsFlyer</h2>
                     <p className="mt-1 text-xs text-muted">
-                      Подтягивает данные об инсталлах и показах paywall.
-                      <span className="ml-1 rounded bg-border/50 px-1.5 py-0.5 font-mono text-[10px]">STUB</span>
-                      {" "}— сейчас возвращает нули. Реальный API подключается в{" "}
-                      <code className="text-[11px]">backend/src/integrations/appsflyer.ts</code>.
+                      Подтягивает данные об инсталлах, показах paywall и атрибуции по источникам/кампаниям.
+                      Укажите названия in-app событий для триалов и подписок, чтобы получать конверсии по источникам.
                     </p>
                   </div>
                   <IntegrationForm
@@ -635,17 +731,19 @@ export default function SettingsClient() {
                 </div>
               )}
 
-              {/* Ad Spend CSV */}
+              {/* Ad Spend */}
               {activeSection === "adspend" && (
                 <div>
                   <div className="mb-4">
-                    <h2 className="text-sm font-semibold text-text">Импорт рекламных расходов</h2>
+                    <h2 className="text-sm font-semibold text-text">Рекламные расходы</h2>
                     <p className="mt-1 text-xs text-muted">
-                      Загрузите CSV с дневными расходами по одному источнику. Формат:{" "}
-                      <code className="font-mono text-[11px]">YYYY-MM-DD,сумма</code>
+                      Введите расходы по источнику и кампании. Источник и кампания должны совпадать точно
+                      с именами в AppsFlyer (например: <code className="font-mono text-[11px]">Apple Search Ads</code>,{" "}
+                      <code className="font-mono text-[11px]">googleadwords_int</code>).
+                      Это необходимо для корректного сопоставления с данными атрибуции.
                     </p>
                   </div>
-                  <AdSpendImport appId={selectedAppId} />
+                  <AdSpendManager appId={selectedAppId} />
                 </div>
               )}
             </div>

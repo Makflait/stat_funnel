@@ -53,6 +53,15 @@ export interface ApphudGeoMetrics {
   refundsDay: number;
 }
 
+export interface AppsFlyerAttributionRow {
+  date: string;        // YYYY-MM-DD
+  mediaSource: string; // "Apple Search Ads", "googleadwords_int", "Organic", etc.
+  campaign: string;    // campaign name (empty string for organic/unknown)
+  installs: number;
+  trials: number;
+  subscriptions: number;
+}
+
 export interface SyncResult {
   daysProcessed: number;
   updatedCount: number;

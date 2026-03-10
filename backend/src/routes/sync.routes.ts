@@ -50,6 +50,7 @@ const adSpendRowSchema = z.object({
 const adSpendImportSchema = z.object({
   appId: z.string().min(1),
   source: z.string().min(1).max(50),
+  campaign: z.string().default(""),
   rows: z.array(adSpendRowSchema).min(1).max(1000),
 });
 
@@ -69,16 +70,18 @@ router.post("/adspend/import", async (req, res, next) => {
         const date = toDateOnlyUtc(row.date);
         await tx.adSpendDaily.upsert({
           where: {
-            appId_date_source: {
+            appId_date_source_campaign: {
               appId: payload.appId,
               date,
               source: payload.source,
+              campaign: payload.campaign,
             },
           },
           create: {
             appId: payload.appId,
             date,
             source: payload.source,
+            campaign: payload.campaign,
             spend: new Prisma.Decimal(row.spend),
           },
           update: {
@@ -135,6 +138,7 @@ router.get("/adspend", async (req, res, next) => {
         id: r.id,
         date: r.date.toISOString().slice(0, 10),
         source: r.source,
+        campaign: r.campaign,
         spend: Number(r.spend),
       })),
     });

@@ -391,7 +391,12 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
   // The effective liveData for the currently selected GEO (or aggregate)
   const liveData = useMemo<PredictLiveData | null>(() => {
     if (!liveDataByGeo?.length) return null;
-    if (selectedGeo === "ALL") return aggregateLiveData(liveDataByGeo);
+    if (selectedGeo === "ALL") {
+      // Prefer pre-computed "ALL" entry (computed from overall kpis/funnel in dashboard)
+      const allEntry = liveDataByGeo.find((g) => g.geo === "ALL");
+      if (allEntry) return allEntry;
+      return aggregateLiveData(liveDataByGeo.filter((g) => g.geo !== "ALL"));
+    }
     return liveDataByGeo.find((g) => g.geo === selectedGeo) ?? null;
   }, [liveDataByGeo, selectedGeo]);
 
@@ -468,7 +473,8 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
   }
 
   const hasLiveData = liveData != null && (liveData.crTrialToSub != null || liveData.crPaywallToTrial != null || (liveData.subscriptionPrice ?? 0) > 0);
-  const hasGeoSelector = (liveDataByGeo?.length ?? 0) >= 1;
+  // Show geo selector only when there are named country entries (exclude synthetic "ALL")
+  const hasGeoSelector = (liveDataByGeo?.filter((g) => g.geo !== "ALL").length ?? 0) >= 1;
 
   return (
     <section className="card p-5 sm:p-6 section-enter" style={{ animationDelay: "480ms" }}>
@@ -504,7 +510,7 @@ export default function PredictBlock({ liveDataByGeo }: PredictBlockProps) {
                 >
                   All
                 </button>
-                {liveDataByGeo.map((g) => (
+                {liveDataByGeo.filter((g) => g.geo !== "ALL").map((g) => (
                   <button
                     key={g.geo}
                     onClick={() => setSelectedGeo(g.geo)}

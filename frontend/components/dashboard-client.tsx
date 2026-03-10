@@ -17,6 +17,7 @@ import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import type { AppItem, DashboardResponse, GeoBreakdown, Kpis, Report } from "@/lib/types";
 import ReportFormModal, { ReportFormPayload } from "./report-form-modal";
 import PredictBlock, { PredictLiveData } from "./predict-block";
+import AttributionSection from "./attribution-section";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,13 @@ const IconTarget = () => (
     <circle cx="12" cy="12" r="10" />
     <circle cx="12" cy="12" r="6" />
     <circle cx="12" cy="12" r="2" />
+  </svg>
+);
+
+const IconCart = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
   </svg>
 );
 
@@ -497,37 +505,52 @@ export default function DashboardClient() {
   //   1. Apphud GeoReport country mode (dashboard.activeCountry is set)
   //   2. Classic Report geo breakdown mode
   const predictLiveDataByGeo = useMemo<Array<PredictLiveData & { geo: string }> | null>(() => {
-    // ── Apphud country mode ──────────────────────────────────────────────────
-    if (dashboard?.activeCountry && dashboard.kpis) {
+    if (!dashboard) return null;
+
+    // Build "ALL" aggregate entry from overall kpis + funnel (most accurate source)
+    const buildAllEntry = (): (PredictLiveData & { geo: string }) | null => {
+      if (!dashboard.kpis) return null;
       const subStage = dashboard.funnel?.find((s) => s.key === "sub");
-      const subCount = subStage?.value ?? 0;
-      // Avg price per new subscriber in the selected period
+      const totalSubs = subStage?.value ?? 0;
       const avgSubPrice =
-        subCount > 0 && dashboard.kpis.revenueDay > 0
-          ? dashboard.kpis.revenueDay / subCount
+        totalSubs > 0 && dashboard.kpis.revenueDay > 0
+          ? dashboard.kpis.revenueDay / totalSubs
           : null;
-      return [
-        {
-          geo: dashboard.activeCountry,
-          crPaywallToTrial: null, // not available from Apphud
-          crTrialToSub: dashboard.kpis.crTrialToSubscription,
-          avgDailyInstalls: 0,
-          subscriptionPrice: avgSubPrice,
-        },
-      ];
+      const avgDailyInstalls =
+        dashboard.trend.length > 0
+          ? dashboard.trend.reduce((s, d) => s + d.installs, 0) / dashboard.trend.length
+          : 0;
+      return {
+        geo: "ALL",
+        crPaywallToTrial: dashboard.kpis.crPaywallToTrial,
+        crTrialToSub: dashboard.kpis.crTrialToSubscription,
+        avgDailyInstalls,
+        subscriptionPrice: avgSubPrice,
+      };
+    };
+
+    // ── Apphud country mode (user selected a specific country on the dashboard) ──
+    if (dashboard.activeCountry && dashboard.kpis) {
+      const allEntry = buildAllEntry();
+      if (!allEntry) return null;
+      // Return single entry for the active country (crPaywallToTrial not available from Apphud)
+      return [{ ...allEntry, geo: dashboard.activeCountry, crPaywallToTrial: null }];
     }
 
-    // ── Classic Report geo breakdown mode ────────────────────────────────────
-    const breakdown: GeoBreakdown[] = dashboard?.geoBreakdown ?? [];
-    if (!breakdown.length) return null;
-    return breakdown.map((g) => ({
+    // ── Aggregate mode: "ALL" entry + per-country breakdown ──────────────────
+    const allEntry = buildAllEntry();
+    const breakdown: GeoBreakdown[] = dashboard.geoBreakdown ?? [];
+    const countryEntries = breakdown.map((g) => ({
       geo: g.geo,
       crPaywallToTrial: g.kpis?.crPaywallToTrial ?? null,
       crTrialToSub: g.kpis?.crTrialToSubscription ?? null,
       avgDailyInstalls: g.avgDailyInstalls,
       subscriptionPrice: g.avgSubPrice ?? null,
     }));
-  }, [dashboard?.geoBreakdown, dashboard?.activeCountry, dashboard?.kpis, dashboard?.funnel]);
+
+    const result = [...(allEntry ? [allEntry] : []), ...countryEntries];
+    return result.length > 0 ? result : null;
+  }, [dashboard?.geoBreakdown, dashboard?.activeCountry, dashboard?.kpis, dashboard?.funnel, dashboard?.trend]);
 
   useEffect(() => {
     const token = getToken();
@@ -767,12 +790,22 @@ export default function DashboardClient() {
         icon: <IconDollar />,
         iconBg: "rgba(16, 185, 129, 0.14)",
         iconColor: "#34d399",
-        description: (kpis.purchasesRevenueDay ?? 0) > 0
-          ? `Подписки + продления · 🛒 Кредиты: ${formatCurrency(kpis.purchasesRevenueDay ?? 0)}`
-          : "Выручка за период (подписки + продления)",
+        description: "Выручка за период (подписки + продления)",
         delay: isGeo ? 240 : 400,
         geoRelevant: true,
       },
+      ...((kpis.purchasesRevenueDay ?? 0) > 0 ? [{
+        label: "Кредиты",
+        rawValue: kpis.purchasesRevenueDay ?? 0,
+        formatted: formatCurrency(kpis.purchasesRevenueDay ?? 0),
+        valueType: "currency" as ValueType,
+        icon: <IconCart />,
+        iconBg: "rgba(59, 130, 246, 0.14)",
+        iconColor: "#60a5fa",
+        description: "Выручка от покупок кредитов (In-App)",
+        delay: isGeo ? 280 : 440,
+        geoRelevant: true,
+      }] : []),
       {
         label: "ARPU",
         rawValue: kpis.arpu ?? 0,
@@ -1210,6 +1243,13 @@ export default function DashboardClient() {
             )}
           </div>
         </section>
+
+        {/* ╔══════════════════════════╗
+            ║       ATTRIBUTION        ║
+            ╚══════════════════════════╝ */}
+        {selectedAppId && (
+          <AttributionSection appId={selectedAppId} from={range.from} to={range.to} />
+        )}
 
         {/* ╔══════════════════════════╗
             ║         PREDICT          ║

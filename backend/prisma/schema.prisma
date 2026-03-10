@@ -28,10 +28,11 @@ model App {
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  reports      Report[]
-  integrations Integration[]
-  adSpends     AdSpendDaily[]
-  geoReports   GeoReport[]
+  reports         Report[]
+  integrations    Integration[]
+  adSpends        AdSpendDaily[]
+  geoReports      GeoReport[]
+  campaignReports CampaignReport[]
 
   @@index([ownerId])
 }
@@ -64,11 +65,12 @@ model AdSpendDaily {
   app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
   date      DateTime
   source    String
+  campaign  String   @default("")
   spend     Decimal  @db.Decimal(10, 2)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([appId, date, source])
+  @@unique([appId, date, source, campaign])
   @@index([appId, date])
 }
 
@@ -143,4 +145,22 @@ model Report {
 
   @@unique([appId, date, geo])
   @@index([appId, geo, date(sort: Desc)])
+}
+
+model CampaignReport {
+  id            String   @id @default(cuid())
+  appId         String
+  app           App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  date          DateTime
+  mediaSource   String
+  campaign      String   @default("")
+  installs      Int      @default(0)
+  trials        Int      @default(0)
+  subscriptions Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([appId, date, mediaSource, campaign])
+  @@index([appId, date])
+  @@index([appId, mediaSource])
 }
