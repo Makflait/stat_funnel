@@ -56,7 +56,7 @@ interface ApphudWebhookPayload {
   app?: { uid?: string; bundle_id?: string };
   event: {
     id: string;
-    created_at: string;        // ISO 8601
+    created_at?: string;       // ISO 8601
     name: string;
     properties?: {
       usd_price?: number;      // revenue / refund amount in USD
@@ -116,13 +116,15 @@ router.post("/apphud/:appId", async (req, res, next) => {
 
     // ── 3. Parse payload ──────────────────────────────────────────────────────
     const payload = req.body as ApphudWebhookPayload;
-    if (!payload?.event?.name || !payload?.event?.created_at) {
-      return res.status(400).json({ message: "Missing event.name or event.created_at" });
+    if (!payload?.event?.name) {
+      return res.status(400).json({ message: "Missing event.name" });
     }
 
     const eventName = payload.event.name;
-    const eventDate = toDateOnlyUtc(payload.event.created_at.slice(0, 10));
-    const country = (payload.user?.country_iso_code ?? "XX").toUpperCase().slice(0, 2);
+    const rawDate = payload.event.created_at ?? new Date().toISOString();
+    const eventDate = toDateOnlyUtc(rawDate.slice(0, 10));
+    const rawCountry = payload.user?.country_iso_code ?? "XX";
+    const country = (rawCountry === "null" ? "XX" : rawCountry).toUpperCase().slice(0, 2);
 
     // Extract USD price from event properties or receipt
     const usdPrice =
