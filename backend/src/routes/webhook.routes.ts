@@ -127,19 +127,20 @@ router.post("/apphud/:appId", async (req, res, next) => {
     const country = (rawCountry === "null" ? "XX" : rawCountry).toUpperCase().slice(0, 2);
 
     // Extract USD price from event properties or receipt
-    const usdPrice =
+    const rawPrice =
       payload.event.properties?.usd_price ??
       payload.event.properties?.proceeds_usd ??
       payload.event.receipt?.price_usd ??
       payload.event.receipt?.proceeds_usd ??
       0;
+    const usdPrice = isFinite(Number(rawPrice)) ? Number(rawPrice) : 0;
 
     // ── 4. Build delta values ─────────────────────────────────────────────────
     const deltaTrials      = TRIAL_START_EVENTS.has(eventName) ? 1 : 0;
     const deltaSubs        = SUB_START_EVENTS.has(eventName) ? 1 : 0;
     const deltaCancels     = SUB_CANCEL_EVENTS.has(eventName) ? 1 : 0;
-    const deltaRevenue     = REVENUE_EVENTS.has(eventName) ? Number(usdPrice) : 0;
-    const deltaRefunds     = REFUND_EVENTS.has(eventName) ? Number(usdPrice) : 0;
+    const deltaRevenue     = REVENUE_EVENTS.has(eventName) ? usdPrice : 0;
+    const deltaRefunds     = REFUND_EVENTS.has(eventName) ? usdPrice : 0;
     const deltaNetGrowth   = deltaSubs - deltaCancels;
 
     // Skip events we don't track
